@@ -49,7 +49,10 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
         <button onClick={onBack} style={{ background: 'none', border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 14px', color: t.textMuted, cursor: 'pointer', fontSize: 13 }}>← Back</button>
         <span style={{ fontSize: 26 }}>{assemblyType.icon}</span>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 20, fontWeight: 700, color: t.text }}>{assemblyType.name}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 20, fontWeight: 700, color: t.text }}>{assemblyType.name}</span>
+            <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: `${assemblyType.color}18`, color: assemblyType.color, fontFamily: mono }}>v{assemblyType.version || '1.0'}</span>
+          </div>
           <div style={{ fontSize: 12, color: t.textMuted }}>
             {loading ? 'Loading from Google Sheets...' : <>{units.length} total · <span style={{ color: pendingCount > 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>{pendingCount} with pending ECNs</span></>}
           </div>
@@ -96,11 +99,12 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
                   <div key={u.sn} onClick={() => toggle(u.sn)} style={{ padding: '10px 12px', borderRadius: 9, cursor: 'pointer', border: sel ? `2px solid ${assemblyType.color}` : `1px solid ${t.border}`, background: sel ? `${assemblyType.color}10` : t.bgCard, transition: 'all 0.1s', position: 'relative' }}>
                     {sel && <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 13, color: assemblyType.color }}>✓</div>}
                     <div style={{ fontSize: 12, fontWeight: 700, color: t.text, fontFamily: mono }}>{u.sn}</div>
-                    <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: `${assemblyType.color}18`, color: assemblyType.color, fontFamily: mono }}>v{u.version || '1.0'}</span>
                       {hasPending ? (
-                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontFamily: mono }}>{u.pendingEcns} ECN pending</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontFamily: mono }}>⏳ {u.pendingEcns} ECN</span>
                       ) : (
-                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontFamily: mono }}>✓ clear</span>
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontFamily: mono }}>✓</span>
                       )}
                     </div>
                     {u.assembler && <div style={{ fontSize: 9, color: t.textDim, marginTop: 3 }}>{u.assembler}</div>}

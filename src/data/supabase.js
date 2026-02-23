@@ -344,8 +344,13 @@ export async function updateAssemblyVersion(id, version) {
 // ADMIN: Group CRUD
 // ============================================================
 
-export async function createGroup(assemblyId, label, icon, color, sortOrder) {
-  const { data, error } = await supabase.from(T.groups).insert({ assembly_id: assemblyId, label, icon: icon || '📦', color: color || '#8b8fa3', sort_order: sortOrder }).select().single();
+export async function createGroup(assemblyId, label, icon, color, sortOrder, version) {
+  // Get current assembly version if not specified
+  if (!version) {
+    const { data: assy } = await supabase.from(T.assemblies).select('version').eq('id', assemblyId).single();
+    version = assy?.version || '1.0';
+  }
+  const { data, error } = await supabase.from(T.groups).insert({ assembly_id: assemblyId, label, icon: icon || '📦', color: color || '#8b8fa3', sort_order: sortOrder, version }).select().single();
   if (error) { console.error('createGroup:', error); return null; }
   return data;
 }
@@ -463,6 +468,135 @@ export async function bulkUpdateUnitVersions(unitSns, newVersion, newStatus) {
   );
   const errors = results.filter((r) => r.error);
   return { success: unitSns.length - errors.length, failed: errors.length };
+}
+
+// ============================================================
+// ADMIN: Version History
+// ============================================================
+
+export async function fetchVersionHistory(assemblyId) {
+  const { data, error } = await supabase
+    .from('eagle_eye_app_version_history')
+    .select('*')
+    .eq('assembly_id', assemblyId)
+    .order('created_at', { ascending: false });
+  if (error) { console.error('fetchVersionHistory:', error); return []; }
+  return data;
+}
+
+// ============================================================
+// ADMIN: Create New Version (clone tree + mark units outdated)
+// ============================================================
+
+export async function createNewVersion(assemblyId, newVersion, notes, createdBy) {
+  // 1. Get current assembly
+  const { data: assy } = await supabase.from(T.assemblies).select('*').eq('id', assemblyId).single();
+  if (!assy) return { ok: false, error: 'Assembly not found' };
+  const oldVersion = assy.version;
+
+  // 2. Record version history
+  const { error: vhErr } = await supabase.from('eagle_eye_app_version_history').insert({
+    assembly_id: assemblyId, version: newVersion, notes, created_by: createdBy || 'admin',
+  });
+  if (vhErr) { console.error('version_history insert:', vhErr); return { ok: false, error: vhErr.message }; }
+
+  // 3. Clone groups for new version
+  const { data: oldGroups } = await supabase.from(T.groups).select('*').eq('assembly_id', assemblyId).eq('version', oldVersion).order('sort_order');
+
+  for (const g of (oldGroups || [])) {
+    const { data: newGroup } = await supabase.from(T.groups).insert({
+      assembly_id: assemblyId, label: g.label, icon: g.icon, color: g.color, sort_order: g.sort_order, version: newVersion,
+    }).select().single();
+    if (!newGroup) continue;
+
+    // Clone steps
+    const { data: oldSteps } = await supabase.from(T.steps).select('*').eq('group_id', g.id).order('sort_order');
+    for (const s of (oldSteps || [])) {
+      const { data: newStep } = await supabase.from(T.steps).insert({
+        group_id: newGroup.id, label: s.label, seq_tag: s.seq_tag, sort_order: s.sort_order,
+        type: s.type, pn: s.pn, x: s.x, y: s.y,
+      }).select().single();
+      if (!newStep) continue;
+
+      // Clone parts
+      const { data: oldParts } = await supabase.from(T.parts).select('*').eq('step_id', s.id);
+      for (const p of (oldParts || [])) {
+        await supabase.from(T.parts).insert({
+          step_id: newStep.id, pn: p.pn, name: p.name, qty: p.qty, sort_order: p.sort_order,
+        });
+      }
+
+      // Clone fasteners
+      const { data: oldFasteners } = await supabase.from(T.fasteners).select('*').eq('step_id', s.id);
+      for (const f of (oldFasteners || [])) {
+        await supabase.from(T.fasteners).insert({
+          step_id: newStep.id, code: f.code, torque: f.torque, loctite: f.loctite, qty: f.qty, sort_order: f.sort_order,
+        });
+      }
+    }
+  }
+
+  // 4. Update assembly current version
+  await supabase.from(T.assemblies).update({ version: newVersion, updated_at: new Date().toISOString() }).eq('id', assemblyId);
+
+  // 5. Mark ALL units on older versions as outdated
+  await supabase.from(T.units).update({
+    latest_version: newVersion, status: 'outdated', updated_at: new Date().toISOString(),
+  }).eq('assembly_id', assemblyId).neq('version', newVersion);
+
+  return { ok: true, oldVersion, newVersion, clonedGroups: (oldGroups || []).length };
+}
+
+// ============================================================
+// ADMIN: Fetch tree for a specific version
+// ============================================================
+
+export async function fetchTreeForVersion(assemblyId, version) {
+  // Groups for this version
+  const { data: groups, error: gErr } = await supabase
+    .from(T.groups)
+    .select('*')
+    .eq('assembly_id', assemblyId)
+    .eq('version', version)
+    .order('sort_order');
+
+  if (gErr || !groups?.length) {
+    // Fallback: try groups without version filter (for legacy data)
+    const { data: fallback } = await supabase
+      .from(T.groups).select('*').eq('assembly_id', assemblyId).order('sort_order');
+    if (!fallback?.length) return [];
+    return buildTreeFromGroups(fallback);
+  }
+
+  return buildTreeFromGroups(groups);
+}
+
+async function buildTreeFromGroups(groups) {
+  const groupIds = groups.map((g) => g.id);
+  const { data: steps } = await supabase.from(T.steps).select('*').in('group_id', groupIds).order('sort_order');
+
+  const stepIds = (steps || []).map((s) => s.id);
+  let parts = [], fasteners = [];
+  if (stepIds.length > 0) {
+    const { data: pData } = await supabase.from(T.parts).select('step_id').in('step_id', stepIds);
+    parts = pData || [];
+    const { data: fData } = await supabase.from(T.fasteners).select('step_id').in('step_id', stepIds);
+    fasteners = fData || [];
+  }
+
+  const partCount = {}, fastenerCount = {};
+  parts.forEach((p) => { partCount[p.step_id] = (partCount[p.step_id] || 0) + 1; });
+  fasteners.forEach((f) => { fastenerCount[f.step_id] = (fastenerCount[f.step_id] || 0) + 1; });
+
+  return groups.map((g, idx) => ({
+    id: `g${g.id}`, dbId: g.id, name: g.label, icon: g.icon || '📦', color: g.color || '#8b8fa3',
+    version: g.version, sortOrder: g.sort_order,
+    steps: (steps || []).filter((s) => s.group_id === g.id).map((s) => ({
+      id: `s${s.id}`, dbId: s.id, sn: s.seq_tag || String(s.sort_order), name: s.label,
+      type: (s.type || 'step').toUpperCase(), parts: partCount[s.id] || 0, fasteners: fastenerCount[s.id] || 0,
+      sortOrder: s.sort_order, pn: s.pn, x: s.x, y: s.y,
+    })),
+  }));
 }
 
 export { T, ASSEMBLY_DISPLAY };

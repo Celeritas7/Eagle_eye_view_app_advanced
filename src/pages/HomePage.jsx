@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { fetchAssemblyTypesFromSheets } from '../data/googleSheets';
+import { fetchAllAssemblies } from '../data/supabase';
 import { getTheme, mono } from '../theme';
 
 export default function HomePage({ dark, role, onSelectType, onGoAdmin }) {
@@ -12,8 +13,20 @@ export default function HomePage({ dark, role, onSelectType, onGoAdmin }) {
     (async () => {
       setLoading(true);
       try {
-        const types = await fetchAssemblyTypesFromSheets();
-        setAssemblyTypes(types);
+        // Fetch from both sources
+        const [sheetTypes, dbAssemblies] = await Promise.all([
+          fetchAssemblyTypesFromSheets(),
+          fetchAllAssemblies(),
+        ]);
+        // Merge: use Supabase versions on top of Google Sheets unit data
+        const dbMap = {};
+        dbAssemblies.forEach((a) => { dbMap[a.tag] = a; });
+
+        const merged = sheetTypes.map((st) => {
+          const db = dbMap[st.tag];
+          return { ...st, version: db?.version || '1.0', dbId: db?.id };
+        });
+        setAssemblyTypes(merged);
       } catch (e) {
         setError(e.message);
       }
@@ -85,7 +98,10 @@ export default function HomePage({ dark, role, onSelectType, onGoAdmin }) {
         onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = `0 6px 20px ${a.color}15`; }}
         onMouseLeave={(e) => { e.currentTarget.style.transform = 'none'; e.currentTarget.style.boxShadow = 'none'; }}>
         <div style={{ fontSize: 28, marginBottom: 8 }}>{a.icon}</div>
-        <div style={{ fontSize: 15, fontWeight: 700, color: t.text }}>{a.name}</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: t.text }}>{a.name}</span>
+          <span style={{ fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 5, background: `${a.color}18`, color: a.color, fontFamily: mono }}>v{a.version}</span>
+        </div>
         <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 8, background: `${a.color}15`, color: a.color, fontFamily: mono }}>{a.unitCount} units</span>
           {a.outdatedCount > 0 && <span style={{ fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 8, background: 'rgba(239,68,68,0.1)', color: '#ef4444', fontFamily: mono }}>{a.outdatedCount} pending</span>}
