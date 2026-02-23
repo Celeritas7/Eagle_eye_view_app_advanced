@@ -227,8 +227,8 @@ export async function fetchUnitsFromSheet(sheetName) {
       completionDate: f.completionDate ? cell(row, f.completionDate) : null,
       notes: f.notes ? String(cell(row, f.notes) || '') : '',
       ecnStatuses, pendingEcns, components,
-      version: '1.0', latestVersion: '1.0',
-      status: pendingEcns > 0 ? 'outdated' : 'current',
+      version: null, latestVersion: null, // will be filled by mergeWithSupabase
+      status: null,
     });
   }
   return units;

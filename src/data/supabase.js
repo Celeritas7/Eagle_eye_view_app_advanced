@@ -471,6 +471,39 @@ export async function bulkUpdateUnitVersions(unitSns, newVersion, newStatus) {
 }
 
 // ============================================================
+// Merge Google Sheets units with Supabase version data
+// ============================================================
+
+export async function mergeUnitsWithVersions(sheetUnits, assemblyTag, currentVersion) {
+  // Fetch Supabase production_units for this assembly
+  const { data: assy } = await supabase.from(T.assemblies).select('id, version').eq('tag', assemblyTag).single();
+  const ver = currentVersion || assy?.version || '1.0';
+
+  let dbUnits = [];
+  if (assy) {
+    const { data } = await supabase.from(T.units).select('sn, version, status, latest_version').eq('assembly_id', assy.id);
+    dbUnits = data || [];
+  }
+
+  const dbMap = {};
+  dbUnits.forEach((u) => { dbMap[u.sn] = u; });
+
+  return sheetUnits.map((u) => {
+    const db = dbMap[u.sn];
+    const unitVersion = db?.version || '1.0';
+    const isOutdated = unitVersion !== ver;
+    const hasPendingEcn = u.pendingEcns > 0;
+    return {
+      ...u,
+      version: unitVersion,
+      latestVersion: ver,
+      status: isOutdated ? 'outdated' : (hasPendingEcn ? 'pending_ecn' : 'current'),
+      isOutdated,
+    };
+  });
+}
+
+// ============================================================
 // ADMIN: Version History
 // ============================================================
 

@@ -7,10 +7,10 @@ import {
   fetchStepParts, createPart, deletePart,
   fetchStepFasteners, createFastener, deleteFastener,
   fetchEcnLog, createEcnEntry, bulkUpdateUnitVersions,
-  fetchVersionHistory, createNewVersion,
+  fetchVersionHistory, createNewVersion, mergeUnitsWithVersions,
   ASSEMBLY_DISPLAY,
 } from '../data/supabase';
-import { fetchUnitsFromSheet, SHEET_CONFIG } from '../data/googleSheets';
+import { fetchUnitsFromSheet, fetchEcnColumnsFromSheet, SHEET_CONFIG } from '../data/googleSheets';
 
 const TABS = [
   { key: 'versions', label: '📋 Versions', desc: 'Create versions & auto-clone trees' },
@@ -462,7 +462,7 @@ function StepDetailPanel({ dark, detail, setDetail, showToast, sty, readOnly }) 
 }
 
 // ============================================================
-// TAB 3: UNIT VERSIONS
+// TAB 3: UNIT VERSIONS + ECN APPLICATION
 // ============================================================
 function UnitsTab({ dark, assembly, showToast, sty }) {
   const t = getTheme(dark);
@@ -472,24 +472,30 @@ function UnitsTab({ dark, assembly, showToast, sty }) {
   const [targetVersion, setTargetVersion] = useState(assembly.version);
   const [filter, setFilter] = useState('all');
   const [saving, setSaving] = useState(false);
+  const [expandedUnit, setExpandedUnit] = useState(null); // unit SN for ECN detail
 
   const sheetEntry = Object.entries(SHEET_CONFIG).find(([_, cfg]) => cfg.tag === assembly.tag);
   const sheetName = sheetEntry ? sheetEntry[0] : null;
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      if (sheetName) {
-        const data = await fetchUnitsFromSheet(sheetName);
-        setUnits(data);
-      }
-      setLoading(false);
-    })();
-  }, [sheetName]);
+  const loadUnits = async () => {
+    setLoading(true);
+    if (sheetName) {
+      const sheetData = await fetchUnitsFromSheet(sheetName);
+      const merged = await mergeUnitsWithVersions(sheetData, assembly.tag, assembly.version);
+      setUnits(merged);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => { loadUnits(); }, [sheetName, assembly.version]);
+
+  const outdatedCount = units.filter((u) => u.isOutdated).length;
+  const pendingEcnCount = units.filter((u) => u.pendingEcns > 0).length;
 
   const filtered = units.filter((u) => {
-    if (filter === 'outdated') return u.status === 'outdated' || u.pendingEcns > 0;
-    if (filter === 'current') return u.status === 'current' && u.pendingEcns === 0;
+    if (filter === 'outdated') return u.isOutdated;
+    if (filter === 'pending_ecn') return u.pendingEcns > 0;
+    if (filter === 'current') return !u.isOutdated && u.pendingEcns === 0;
     return true;
   });
 
@@ -503,64 +509,89 @@ function UnitsTab({ dark, assembly, showToast, sty }) {
     setSaving(false);
     showToast(`✓ ${result.success} units upgraded to v${targetVersion.trim()}`);
     setSelected(new Set());
+    await loadUnits(); // Refresh to show updated versions
   };
 
   if (loading) return <div style={{ padding: 20, color: t.textMuted }}>Loading units...</div>;
   if (!sheetName) return <div style={{ ...sty.card, color: t.textMuted }}>No sheet configured for {assembly.tag}</div>;
 
-  const outdatedCount = units.filter((u) => u.pendingEcns > 0 || u.status === 'outdated').length;
-
   return (
     <div>
-      {/* Summary */}
+      {/* Summary cards */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <div style={{ ...sty.card, flex: 1, minWidth: 120, textAlign: 'center', padding: 14 }}>
-          <div style={{ fontSize: 24, fontWeight: 900, color: t.text, fontFamily: mono }}>{units.length}</div>
-          <div style={{ fontSize: 10, color: t.textMuted }}>Total Units</div>
+        <div style={{ ...sty.card, flex: 1, minWidth: 100, textAlign: 'center', padding: 12 }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: t.text, fontFamily: mono }}>{units.length}</div>
+          <div style={{ fontSize: 10, color: t.textMuted }}>Total</div>
         </div>
-        <div style={{ ...sty.card, flex: 1, minWidth: 120, textAlign: 'center', padding: 14, borderLeft: '3px solid #22c55e' }}>
-          <div style={{ fontSize: 24, fontWeight: 900, color: '#22c55e', fontFamily: mono }}>{units.length - outdatedCount}</div>
-          <div style={{ fontSize: 10, color: t.textMuted }}>Current (v{assembly.version})</div>
+        <div style={{ ...sty.card, flex: 1, minWidth: 100, textAlign: 'center', padding: 12, borderLeft: '3px solid #22c55e' }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: '#22c55e', fontFamily: mono }}>{units.length - outdatedCount}</div>
+          <div style={{ fontSize: 10, color: t.textMuted }}>v{assembly.version} ✓</div>
         </div>
-        <div style={{ ...sty.card, flex: 1, minWidth: 120, textAlign: 'center', padding: 14, borderLeft: '3px solid #ef4444' }}>
-          <div style={{ fontSize: 24, fontWeight: 900, color: '#ef4444', fontFamily: mono }}>{outdatedCount}</div>
-          <div style={{ fontSize: 10, color: t.textMuted }}>Outdated / Pending ECN</div>
+        <div style={{ ...sty.card, flex: 1, minWidth: 100, textAlign: 'center', padding: 12, borderLeft: '3px solid #ef4444' }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: '#ef4444', fontFamily: mono }}>{outdatedCount}</div>
+          <div style={{ fontSize: 10, color: t.textMuted }}>Outdated</div>
+        </div>
+        <div style={{ ...sty.card, flex: 1, minWidth: 100, textAlign: 'center', padding: 12, borderLeft: '3px solid #f59e0b' }}>
+          <div style={{ fontSize: 22, fontWeight: 900, color: '#f59e0b', fontFamily: mono }}>{pendingEcnCount}</div>
+          <div style={{ fontSize: 10, color: t.textMuted }}>Pending ECN</div>
         </div>
       </div>
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        {[{ k: 'all', l: `All (${units.length})` }, { k: 'outdated', l: `Outdated (${outdatedCount})` }, { k: 'current', l: `Current` }].map(({ k, l }) => (
-          <button key={k} onClick={() => setFilter(k)} style={{ ...sty.btnOutline, background: filter === k ? 'rgba(139,92,246,0.1)' : 'transparent', color: filter === k ? '#8b5cf6' : t.textMuted, borderColor: filter === k ? '#8b5cf6' : t.border }}>{l}</button>
+        {[
+          { k: 'all', l: `All (${units.length})`, c: '#8b5cf6' },
+          { k: 'outdated', l: `Outdated (${outdatedCount})`, c: '#ef4444' },
+          { k: 'pending_ecn', l: `Pending ECN (${pendingEcnCount})`, c: '#f59e0b' },
+          { k: 'current', l: `Current`, c: '#22c55e' },
+        ].map(({ k, l, c }) => (
+          <button key={k} onClick={() => setFilter(k)} style={{ ...sty.btnOutline, background: filter === k ? `${c}15` : 'transparent', color: filter === k ? c : t.textMuted, borderColor: filter === k ? c : t.border }}>{l}</button>
         ))}
         <button onClick={selectAll} style={{ ...sty.btnOutline, marginLeft: 'auto' }}>Select all ({filtered.length})</button>
         {selected.size > 0 && <button onClick={() => setSelected(new Set())} style={sty.btnOutline}>Clear</button>}
       </div>
 
-      {/* Unit grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 4, maxHeight: 380, overflowY: 'auto', padding: 2, marginBottom: 12 }}>
-        {filtered.map((u) => {
-          const sel = selected.has(u.sn);
-          const isOutdated = u.pendingEcns > 0;
-          return (
-            <div key={u.sn} onClick={() => toggle(u.sn)} style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', border: sel ? '2px solid #8b5cf6' : `1px solid ${t.border}`, background: sel ? 'rgba(139,92,246,0.08)' : t.bgCard }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: t.text, flex: 1 }}>{u.sn}</span>
-                <span style={{ ...sty.badge(isOutdated ? '#ef444420' : '#22c55e20', isOutdated ? '#ef4444' : '#22c55e'), fontSize: 9 }}>
-                  v{u.version || '1.0'}
-                </span>
-              </div>
-              <div style={{ fontSize: 9, color: isOutdated ? '#f59e0b' : t.textMuted, marginTop: 3 }}>
-                {isOutdated ? `⏳ ${u.pendingEcns} pending ECN` : '✓ current'}
-              </div>
-            </div>
-          );
-        })}
+      <div style={{ display: 'flex', gap: 12 }}>
+        {/* Unit grid */}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 4, maxHeight: 400, overflowY: 'auto', padding: 2 }}>
+            {filtered.map((u) => {
+              const sel = selected.has(u.sn);
+              const isExp = expandedUnit === u.sn;
+              return (
+                <div key={u.sn} style={{ padding: '8px 10px', borderRadius: 8, cursor: 'pointer', border: sel ? '2px solid #8b5cf6' : isExp ? '2px solid #f59e0b' : `1px solid ${t.border}`, background: sel ? 'rgba(139,92,246,0.08)' : isExp ? 'rgba(245,158,11,0.05)' : t.bgCard }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <span onClick={() => toggle(u.sn)} style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: t.text, flex: 1 }}>{u.sn}</span>
+                    {u.pendingEcns > 0 && (
+                      <button onClick={() => setExpandedUnit(isExp ? null : u.sn)} style={{ background: 'none', border: 'none', fontSize: 10, cursor: 'pointer', color: '#f59e0b', fontWeight: 700, padding: '2px 4px' }} title="View ECN details">
+                        📋
+                      </button>
+                    )}
+                  </div>
+                  <div onClick={() => toggle(u.sn)} style={{ display: 'flex', gap: 3, marginTop: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 5, background: u.isOutdated ? 'rgba(239,68,68,0.12)' : 'rgba(34,197,94,0.12)', color: u.isOutdated ? '#ef4444' : '#22c55e', fontFamily: mono }}>v{u.version}</span>
+                    {u.isOutdated && <span style={{ fontSize: 8, color: '#ef4444' }}>→ v{u.latestVersion}</span>}
+                    {!u.isOutdated && u.pendingEcns > 0 && <span style={{ fontSize: 8, color: '#f59e0b' }}>⚠ {u.pendingEcns} ECN</span>}
+                    {!u.isOutdated && u.pendingEcns === 0 && <span style={{ fontSize: 8, color: '#22c55e' }}>✓</span>}
+                  </div>
+                  {u.assembler && <div style={{ fontSize: 9, color: t.textMuted, marginTop: 2 }}>{u.assembler}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ECN Detail Panel */}
+        {expandedUnit && (
+          <div style={{ width: 320, flexShrink: 0 }}>
+            <EcnDetailPanel dark={dark} unit={units.find((u) => u.sn === expandedUnit)} sty={sty} onClose={() => setExpandedUnit(null)} />
+          </div>
+        )}
       </div>
 
       {/* Bulk assign bar */}
       {selected.size > 0 && (
-        <div style={{ padding: '14px 18px', borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ padding: '14px 18px', borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginTop: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, color: t.text }}>{selected.size} units selected</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
             <span style={{ fontSize: 11, color: t.textMuted }}>Upgrade to:</span>
@@ -571,6 +602,64 @@ function UnitsTab({ dark, assembly, showToast, sty }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- ECN Detail Panel (per unit) ----
+function EcnDetailPanel({ dark, unit, sty, onClose }) {
+  const t = getTheme(dark);
+  if (!unit) return null;
+
+  const ecnEntries = Object.entries(unit.ecnStatuses || {});
+  const appliedCount = ecnEntries.filter(([_, v]) => v.status === 'applied').length;
+  const pendingCount = ecnEntries.filter(([_, v]) => v.status === 'pending').length;
+
+  return (
+    <div style={{ ...sty.card, position: 'sticky', top: 80 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#f59e0b' }}>📋 ECN Status</div>
+          <div style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: t.text }}>{unit.sn}</div>
+        </div>
+        <button onClick={onClose} style={{ background: 'none', border: 'none', color: t.textMuted, cursor: 'pointer', fontSize: 14 }}>✕</button>
+      </div>
+
+      {/* Summary */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+        <span style={sty.badge('#22c55e20', '#22c55e')}>✓ {appliedCount} applied</span>
+        <span style={sty.badge('#ef444420', '#ef4444')}>⏳ {pendingCount} pending</span>
+      </div>
+
+      {/* ECN list */}
+      {ecnEntries.length === 0 ? (
+        <div style={{ fontSize: 11, color: t.textMuted, textAlign: 'center', padding: 12 }}>No ECN data for this unit</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {ecnEntries.map(([ecnName, ecnData]) => {
+            const isApplied = ecnData.status === 'applied';
+            const isPending = ecnData.status === 'pending';
+            return (
+              <div key={ecnName} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, background: isApplied ? 'rgba(34,197,94,0.06)' : isPending ? 'rgba(239,68,68,0.06)' : 'transparent', border: `1px solid ${isApplied ? 'rgba(34,197,94,0.15)' : isPending ? 'rgba(239,68,68,0.15)' : t.border}` }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isApplied ? '#22c55e' : isPending ? '#ef4444' : '#6b7280' }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: t.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ecnName}</div>
+                </div>
+                <span style={{ fontSize: 9, fontWeight: 700, fontFamily: mono, color: isApplied ? '#22c55e' : isPending ? '#ef4444' : '#6b7280' }}>
+                  {isApplied ? '✓ DONE' : isPending ? '⏳ PENDING' : ecnData.status?.toUpperCase()}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Raw value note */}
+      <div style={{ marginTop: 12, padding: '8px 10px', borderRadius: 8, background: `${t.textMuted}08`, border: `1px solid ${t.border}` }}>
+        <div style={{ fontSize: 9, color: t.textMuted, lineHeight: 1.5 }}>
+          ECN data is live from Google Sheets. To mark ECNs as applied, update the corresponding cell in the spreadsheet. Changes will reflect on next refresh.
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { fetchUnitsFromSheet, clearSheetCache } from '../data/googleSheets';
+import { mergeUnitsWithVersions } from '../data/supabase';
 import { getTheme, mono } from '../theme';
 
 export default function UnitSelectionPage({ dark, assemblyType, onBack, onProceed }) {
@@ -10,26 +11,24 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const data = await fetchUnitsFromSheet(assemblyType.sheetName);
-      setUnits(data);
-      setLoading(false);
-    })();
-  }, [assemblyType.sheetName]);
-
-  const handleRefresh = async () => {
+  const loadUnits = async () => {
     setLoading(true);
-    clearSheetCache(assemblyType.sheetName);
-    const data = await fetchUnitsFromSheet(assemblyType.sheetName);
-    setUnits(data);
+    const sheetData = await fetchUnitsFromSheet(assemblyType.sheetName);
+    const merged = await mergeUnitsWithVersions(sheetData, assemblyType.tag, assemblyType.version);
+    setUnits(merged);
     setLoading(false);
   };
 
+  useEffect(() => { loadUnits(); }, [assemblyType.sheetName]);
+
+  const handleRefresh = async () => {
+    clearSheetCache(assemblyType.sheetName);
+    await loadUnits();
+  };
+
   const filtered = units.filter((u) => {
-    if (filter === 'pending' && u.pendingEcns === 0) return false;
-    if (filter === 'clear' && u.pendingEcns > 0) return false;
+    if (filter === 'pending' && !u.isOutdated && u.pendingEcns === 0) return false;
+    if (filter === 'clear' && (u.isOutdated || u.pendingEcns > 0)) return false;
     if (search && !u.sn.toLowerCase().includes(search.toLowerCase())) return false;
     return true;
   });
@@ -40,7 +39,7 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
     setSelected(n);
   };
 
-  const pendingCount = units.filter((u) => u.pendingEcns > 0).length;
+  const outdatedCount = units.filter((u) => u.isOutdated || u.pendingEcns > 0).length;
 
   return (
     <div style={{ padding: '28px 24px', maxWidth: 1000, margin: '0 auto' }}>
@@ -54,7 +53,7 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
             <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 6, background: `${assemblyType.color}18`, color: assemblyType.color, fontFamily: mono }}>v{assemblyType.version || '1.0'}</span>
           </div>
           <div style={{ fontSize: 12, color: t.textMuted }}>
-            {loading ? 'Loading from Google Sheets...' : <>{units.length} total · <span style={{ color: pendingCount > 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>{pendingCount} with pending ECNs</span></>}
+            {loading ? 'Loading from Google Sheets...' : <>{units.length} total · <span style={{ color: outdatedCount > 0 ? '#ef4444' : '#22c55e', fontWeight: 600 }}>{outdatedCount} outdated/pending</span></>}
           </div>
         </div>
         <button onClick={handleRefresh} disabled={loading} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, padding: '6px 12px', cursor: loading ? 'wait' : 'pointer', color: t.textMuted, fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -79,7 +78,7 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search S/N..." style={{ padding: '7px 12px', borderRadius: 8, border: `1px solid ${t.border}`, background: t.bgCard, color: t.text, fontSize: 12, width: 180, outline: 'none', fontFamily: mono }} />
             {['all', 'pending', 'clear'].map((f) => (
               <button key={f} onClick={() => setFilter(f)} style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: filter === f ? 'none' : `1px solid ${t.border}`, background: filter === f ? (f === 'pending' ? 'rgba(239,68,68,0.15)' : f === 'clear' ? 'rgba(34,197,94,0.15)' : `${t.accent}20`) : 'transparent', color: filter === f ? (f === 'pending' ? '#ef4444' : f === 'clear' ? '#22c55e' : t.accent) : t.textMuted }}>
-                {f === 'all' ? `All (${units.length})` : f === 'pending' ? `Pending ECN (${pendingCount})` : `Clear (${units.length - pendingCount})`}
+                {f === 'all' ? `All (${units.length})` : f === 'pending' ? `Outdated (${outdatedCount})` : `Current (${units.length - outdatedCount})`}
               </button>
             ))}
             <button onClick={() => { const n = new Set(selected); filtered.forEach((u) => n.add(u.sn)); setSelected(n); }} style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, fontWeight: 600, cursor: 'pointer', border: `1px solid ${t.border}`, background: 'transparent', color: t.textMuted, marginLeft: 'auto' }}>Select all ({filtered.length})</button>
@@ -94,15 +93,17 @@ export default function UnitSelectionPage({ dark, assemblyType, onBack, onProcee
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(185px,1fr))', gap: 6, maxHeight: 420, overflowY: 'auto', padding: 2 }}>
               {filtered.map((u) => {
                 const sel = selected.has(u.sn);
-                const hasPending = u.pendingEcns > 0;
+                const hasPending = u.isOutdated || u.pendingEcns > 0;
                 return (
                   <div key={u.sn} onClick={() => toggle(u.sn)} style={{ padding: '10px 12px', borderRadius: 9, cursor: 'pointer', border: sel ? `2px solid ${assemblyType.color}` : `1px solid ${t.border}`, background: sel ? `${assemblyType.color}10` : t.bgCard, transition: 'all 0.1s', position: 'relative' }}>
                     {sel && <div style={{ position: 'absolute', top: 6, right: 8, fontSize: 13, color: assemblyType.color }}>✓</div>}
                     <div style={{ fontSize: 12, fontWeight: 700, color: t.text, fontFamily: mono }}>{u.sn}</div>
                     <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
-                      <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: `${assemblyType.color}18`, color: assemblyType.color, fontFamily: mono }}>v{u.version || '1.0'}</span>
-                      {hasPending ? (
-                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontFamily: mono }}>⏳ {u.pendingEcns} ECN</span>
+                      <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: u.isOutdated ? 'rgba(239,68,68,0.12)' : `${assemblyType.color}18`, color: u.isOutdated ? '#ef4444' : assemblyType.color, fontFamily: mono }}>v{u.version}</span>
+                      {u.isOutdated ? (
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(239,68,68,0.12)', color: '#ef4444', fontFamily: mono }}>⏳ needs v{u.latestVersion}</span>
+                      ) : u.pendingEcns > 0 ? (
+                        <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(245,158,11,0.12)', color: '#f59e0b', fontFamily: mono }}>⚠ {u.pendingEcns} ECN</span>
                       ) : (
                         <span style={{ fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 6, background: 'rgba(34,197,94,0.12)', color: '#22c55e', fontFamily: mono }}>✓</span>
                       )}
