@@ -7,7 +7,7 @@ import {
   fetchStepParts, createPart, deletePart,
   fetchStepFasteners, createFastener, deleteFastener,
   fetchEcnLog, createEcnEntry, bulkUpdateUnitVersions,
-  fetchVersionHistory, createNewVersion, mergeUnitsWithVersions,
+  fetchVersionHistory, createNewVersion, mergeUnitsWithVersions, cloneTreeToVersion,
   ASSEMBLY_DISPLAY,
 } from '../data/supabase';
 import { fetchUnitsFromSheet, fetchEcnColumnsFromSheet, SHEET_CONFIG } from '../data/googleSheets';
@@ -252,6 +252,9 @@ function TreeTab({ dark, assembly, showToast, sty }) {
   const [addStepGroup, setAddStepGroup] = useState(null);
   const [addStepLabel, setAddStepLabel] = useState('');
   const [addStepTag, setAddStepTag] = useState('');
+  const [isFallback, setIsFallback] = useState(false);
+  const [fallbackVersion, setFallbackVersion] = useState(null);
+  const [cloning, setCloning] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -265,15 +268,17 @@ function TreeTab({ dark, assembly, showToast, sty }) {
 
   const loadTree = useCallback(async () => {
     setLoading(true);
-    const data = await fetchTreeForVersion(assembly.id, selectedVer);
-    setTree(data);
-    setExpanded(new Set(data.map((g) => g.id)));
+    const result = await fetchTreeForVersion(assembly.id, selectedVer);
+    setTree(result.tree);
+    setIsFallback(result.isFallback);
+    setFallbackVersion(result.fallbackVersion);
+    setExpanded(new Set(result.tree.map((g) => g.id)));
     setLoading(false);
   }, [assembly.id, selectedVer]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
-  const isCurrent = selectedVer === assembly.version;
+  const isCurrent = selectedVer === assembly.version && !isFallback;
 
   const handleAddGroup = async () => {
     if (!addGroupName.trim() || !isCurrent) return;
@@ -326,6 +331,26 @@ function TreeTab({ dark, assembly, showToast, sty }) {
           <span style={sty.badge('#f59e0b20', '#f59e0b')}>⚠ Read-only (old version)</span>
         )}
       </div>
+
+      {/* Clone banner — shown when viewing current version but no dedicated tree exists */}
+      {isCurrent && isFallback && (
+        <div style={{ padding: '14px 18px', borderRadius: 12, background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 13 }}>⚠️</span>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: t.text }}>No dedicated tree for v{selectedVer}</div>
+            <div style={{ fontSize: 11, color: t.textMuted }}>Currently showing v{fallbackVersion} tree (read-only). Clone it to create an editable v{selectedVer} tree.</div>
+          </div>
+          <button onClick={async () => {
+            setCloning(true);
+            const result = await cloneTreeToVersion(assembly.id, fallbackVersion, selectedVer);
+            setCloning(false);
+            if (result.ok) { showToast(`✓ Cloned ${result.cloned} groups into v${selectedVer} — now editable!`); loadTree(); }
+            else showToast(`Clone failed: ${result.error}`, 'error');
+          }} disabled={cloning} style={{ ...sty.btn('#f59e0b', '#000'), padding: '10px 20px', opacity: cloning ? 0.5 : 1, whiteSpace: 'nowrap' }}>
+            {cloning ? 'Cloning...' : `Clone v${fallbackVersion} → v${selectedVer}`}
+          </button>
+        </div>
+      )}
 
       {tree.length === 0 ? (
         <div style={{ ...sty.card, textAlign: 'center', padding: 40 }}>
@@ -505,7 +530,7 @@ function UnitsTab({ dark, assembly, showToast, sty }) {
   const handleBulkAssign = async () => {
     if (!targetVersion.trim() || selected.size === 0) return;
     setSaving(true);
-    const result = await bulkUpdateUnitVersions([...selected], targetVersion.trim(), 'current');
+    const result = await bulkUpdateUnitVersions([...selected], targetVersion.trim(), 'current', assembly.tag);
     setSaving(false);
     showToast(`✓ ${result.success} units upgraded to v${targetVersion.trim()}`);
     setSelected(new Set());

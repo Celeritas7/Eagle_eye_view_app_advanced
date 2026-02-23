@@ -460,14 +460,36 @@ export async function createEcnEntry(assemblyId, ecnCode, description, fromVersi
 // ADMIN: Bulk unit version update
 // ============================================================
 
-export async function bulkUpdateUnitVersions(unitSns, newVersion, newStatus) {
-  const results = await Promise.all(
-    unitSns.map((sn) =>
-      supabase.from(T.units).update({ version: newVersion, status: newStatus || 'current', updated_at: new Date().toISOString() }).eq('sn', sn)
-    )
-  );
-  const errors = results.filter((r) => r.error);
-  return { success: unitSns.length - errors.length, failed: errors.length };
+export async function bulkUpdateUnitVersions(unitSns, newVersion, newStatus, assemblyTag) {
+  // Get assembly ID
+  let assemblyId = null;
+  if (assemblyTag) {
+    const { data: assy } = await supabase.from(T.assemblies).select('id').eq('tag', assemblyTag).single();
+    assemblyId = assy?.id;
+  }
+
+  let success = 0, failed = 0;
+  for (const sn of unitSns) {
+    // Try update first
+    const { data: existing } = await supabase.from(T.units).select('id').eq('sn', sn).single();
+
+    if (existing) {
+      const { error } = await supabase.from(T.units).update({
+        version: newVersion, latest_version: newVersion, status: newStatus || 'current', updated_at: new Date().toISOString(),
+      }).eq('sn', sn);
+      error ? failed++ : success++;
+    } else if (assemblyId) {
+      // Insert new unit
+      const { error } = await supabase.from(T.units).insert({
+        assembly_id: assemblyId, sn, version: newVersion, latest_version: newVersion, status: newStatus || 'current',
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      });
+      error ? failed++ : success++;
+    } else {
+      failed++;
+    }
+  }
+  return { success, failed };
 }
 
 // ============================================================
@@ -593,15 +615,59 @@ export async function fetchTreeForVersion(assemblyId, version) {
     .eq('version', version)
     .order('sort_order');
 
-  if (gErr || !groups?.length) {
-    // Fallback: try groups without version filter (for legacy data)
-    const { data: fallback } = await supabase
-      .from(T.groups).select('*').eq('assembly_id', assemblyId).order('sort_order');
-    if (!fallback?.length) return [];
-    return buildTreeFromGroups(fallback);
+  if (!gErr && groups?.length > 0) {
+    const tree = await buildTreeFromGroups(groups);
+    return { tree, isFallback: false, fallbackVersion: null };
   }
 
-  return buildTreeFromGroups(groups);
+  // Fallback: try groups without version filter (for legacy data)
+  const { data: fallback } = await supabase
+    .from(T.groups).select('*').eq('assembly_id', assemblyId).order('sort_order');
+  if (!fallback?.length) return { tree: [], isFallback: false, fallbackVersion: null };
+
+  const fbVersion = fallback[0]?.version || '1.0';
+  const tree = await buildTreeFromGroups(fallback);
+  return { tree, isFallback: true, fallbackVersion: fbVersion };
+}
+
+// Clone an existing tree (from sourceVersion) into targetVersion
+export async function cloneTreeToVersion(assemblyId, sourceVersion, targetVersion) {
+  const { data: srcGroups } = await supabase.from(T.groups).select('*')
+    .eq('assembly_id', assemblyId).eq('version', sourceVersion).order('sort_order');
+
+  // If no groups with that exact version, try all groups for this assembly
+  const groups = srcGroups?.length ? srcGroups :
+    (await supabase.from(T.groups).select('*').eq('assembly_id', assemblyId).order('sort_order')).data || [];
+
+  if (!groups.length) return { ok: false, error: 'No source tree found' };
+
+  let cloned = 0;
+  for (const g of groups) {
+    const { data: newGroup } = await supabase.from(T.groups).insert({
+      assembly_id: assemblyId, label: g.label, icon: g.icon, color: g.color, sort_order: g.sort_order, version: targetVersion,
+    }).select().single();
+    if (!newGroup) continue;
+    cloned++;
+
+    const { data: oldSteps } = await supabase.from(T.steps).select('*').eq('group_id', g.id).order('sort_order');
+    for (const s of (oldSteps || [])) {
+      const { data: newStep } = await supabase.from(T.steps).insert({
+        group_id: newGroup.id, label: s.label, seq_tag: s.seq_tag, sort_order: s.sort_order,
+        type: s.type, pn: s.pn, x: s.x, y: s.y,
+      }).select().single();
+      if (!newStep) continue;
+
+      const { data: oldParts } = await supabase.from(T.parts).select('*').eq('step_id', s.id);
+      for (const p of (oldParts || [])) {
+        await supabase.from(T.parts).insert({ step_id: newStep.id, pn: p.pn, name: p.name, qty: p.qty, sort_order: p.sort_order });
+      }
+      const { data: oldFasteners } = await supabase.from(T.fasteners).select('*').eq('step_id', s.id);
+      for (const f of (oldFasteners || [])) {
+        await supabase.from(T.fasteners).insert({ step_id: newStep.id, code: f.code, torque: f.torque, loctite: f.loctite, qty: f.qty, sort_order: f.sort_order });
+      }
+    }
+  }
+  return { ok: true, cloned };
 }
 
 async function buildTreeFromGroups(groups) {
