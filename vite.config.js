@@ -5,5 +5,5 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   // Change 'eagle-eye-v2' to your GitHub repo name
-  base: '/eagle-eye-v2/',
+  base: '/Eagle_eye_view_app_advanced/',
 });
