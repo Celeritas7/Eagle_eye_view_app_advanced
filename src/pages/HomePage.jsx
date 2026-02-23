@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchAssemblyTypesFromSheets, isSheetsConfigured } from '../data/googleSheets';
+import { fetchAssemblyTypesFromSheets } from '../data/googleSheets';
 import { getTheme, mono } from '../theme';
 
 export default function HomePage({ dark, role, onSelectType, onGoAdmin }) {
@@ -12,11 +12,6 @@ export default function HomePage({ dark, role, onSelectType, onGoAdmin }) {
     (async () => {
       setLoading(true);
       try {
-        if (!isSheetsConfigured()) {
-          setError('Google Sheets API key not configured. Add VITE_GOOGLE_SHEETS_API_KEY to your .env file.');
-          setLoading(false);
-          return;
-        }
         const types = await fetchAssemblyTypesFromSheets();
         setAssemblyTypes(types);
       } catch (e) {
@@ -57,14 +52,8 @@ export default function HomePage({ dark, role, onSelectType, onGoAdmin }) {
 
       {error && (
         <div style={{ textAlign: 'center', padding: 20, color: '#ef4444', background: 'rgba(239,68,68,0.08)', borderRadius: 10, border: '1px solid rgba(239,68,68,0.15)', maxWidth: 500, margin: '0 auto' }}>
-          <div style={{ fontSize: 13, fontWeight: 600 }}>⚠ Configuration needed</div>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>⚠ Error loading data</div>
           <div style={{ fontSize: 11, marginTop: 4, lineHeight: 1.5 }}>{error}</div>
-          <div style={{ fontSize: 10, marginTop: 8, color: t.textMuted, textAlign: 'left', fontFamily: mono, padding: '8px 12px', background: t.bg, borderRadius: 6 }}>
-            1. Go to console.cloud.google.com<br />
-            2. Enable "Google Sheets API"<br />
-            3. Create an API key<br />
-            4. Add to .env: VITE_GOOGLE_SHEETS_API_KEY=your_key
-          </div>
         </div>
       )}
 

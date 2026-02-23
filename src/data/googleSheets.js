@@ -1,152 +1,157 @@
 // ============================================================
-// Google Sheets Reader — Live data from Ghost Tracker spreadsheet
+// Google Sheets — OAuth2 authenticated (same as Ghost Tracker)
 // ============================================================
-// Uses Google Sheets API v4 (requires API key)
-// The spreadsheet must be shared as "Anyone with the link can view"
 
 const SPREADSHEET_ID = '1mUhNDzucbHpS2y-IYu3A5ML1x5I_opUeNnqqyOtg95M';
-const API_KEY = import.meta.env.VITE_GOOGLE_SHEETS_API_KEY || '';
-
+const CLIENT_ID = '1088099187141-ut0dn0scqt3h99htf3rg8gsrg2oo1ad8.apps.googleusercontent.com';
+const SCOPES = 'https://www.googleapis.com/auth/spreadsheets.readonly https://www.googleapis.com/auth/userinfo.email';
 const BASE_URL = `https://sheets.googleapis.com/v4/spreadsheets/${SPREADSHEET_ID}/values`;
 
-// ============================================================
-// Sheet name → assembly config
-// ============================================================
-const SHEET_CONFIG = {
-  '00_GHOST': {
-    tag: 'GST_assy', name: 'Ghost (Full Robot)', icon: '🤖', color: '#f59e0b',
-    dataStart: 2, snCol: 1,
-    fields: { assembler: 4, time: 5, completionDate: 6, notes: 7 },
-    components: { 17: 'MBB', 19: 'PLR', 21: 'HBD', 23: 'ARM', 25: 'DPK' },
-  },
-  '01_L-motor': {
-    tag: 'LAC_assy', name: 'L-Motor', icon: '⚙️', color: '#6366f1',
-    dataStart: 2, snCol: 1,
-    fields: { mod: 2, usage: 3, partsDate: 6, assembler: 7, time: 8, completionDate: 9, notes: 10 },
-    ecnStart: 17,
-  },
-  '02_A12-motor': {
-    tag: 'A12_assy', name: 'A12 Motor', icon: '⚙️', color: '#0ea5e9',
-    dataStart: 2, snCol: 1,
-    fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 15,
-  },
-  '03_A35-motor': {
-    tag: 'A35_assy', name: 'A35 Motor', icon: '⚙️', color: '#14b8a6',
-    dataStart: 2, snCol: 1,
-    fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 18,
-  },
-  '04_A4-motor': {
-    tag: 'A4A_assy', name: 'A4 Motor', icon: '⚙️', color: '#a855f7',
-    dataStart: 2, snCol: 1,
-    fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 18,
-  },
-  '05_Mobile Base': {
-    tag: 'MBB_assy', name: 'Mobile Base', icon: '🔩', color: '#8b5cf6',
-    dataStart: 2, snCol: 1,
-    fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 24,
-  },
-  '06_Pillar': {
-    tag: 'PLR_assy', name: 'Pillar', icon: '🏗️', color: '#ec4899',
-    dataStart: 2, snCol: 1,
-    fields: { partsDate: 4, assembler: 5, time: 6, completionDate: 7, notes: 8 },
-    ecnStart: 18,
-  },
-  '07_Head & Body': {
-    tag: 'HBD_assy', name: 'Head & Body', icon: '🤖', color: '#f59e0b',
-    dataStart: 2, snCol: 1,
-    fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 22,
-  },
-  '08_Gripper': {
-    tag: 'GPR_assy', name: 'Gripper', icon: '🦾', color: '#22c55e',
-    dataStart: 2, snCol: 1,
-    fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 15,
-  },
-  '09_Arm': {
-    tag: 'ARM_assy', name: 'Arm', icon: '💪', color: '#3b82f6',
-    dataStart: 2, snCol: 1,
-    fields: { partsDate: 4, assembler: 7, time: 8, completionDate: 9, notes: 10 },
-    ecnStart: 31,
-    motorCols: { 13: 'A1', 15: 'A2', 17: 'A3', 19: 'A4', 21: 'A5', 23: 'GPR' },
-  },
-  '10_Deploy Kit': {
-    tag: 'DPK_assy', name: 'Deploy Kit', icon: '📦', color: '#f97316',
-    dataStart: 2, snCol: 1,
-    fields: { partsDate: 4, assembler: 6, time: 7, completionDate: 8, notes: 9 },
-    ecnStart: 12,
-  },
+// ---- Auth state ----
+let accessToken = localStorage.getItem('ee_gat') || null;
+let tokenClient = null;
+let currentUser = JSON.parse(localStorage.getItem('ee_user') || 'null');
+let _listeners = [];
+
+const APPROVED_USERS = {
+  'anikettelexistence@gmail.com': { name: 'Aniket', team: 'production', isAdmin: true },
+  'igarashi@tx-inc.com': { name: 'Igarashi', team: 'production', isAdmin: false },
+  'niidome@tx-inc.com': { name: 'Niidome', team: 'production', isAdmin: false },
 };
 
-// ============================================================
-// In-memory cache (avoid re-fetching on every page change)
-// ============================================================
-const cache = {
-  data: {},       // sheetName → parsed rows
-  timestamp: {},  // sheetName → fetch time
-  TTL: 5 * 60 * 1000, // 5 min cache
-};
+function notify() { _listeners.forEach((fn) => fn()); }
+export function onAuthChange(fn) { _listeners.push(fn); return () => { _listeners = _listeners.filter((f) => f !== fn); }; }
+export function getUser() { return currentUser; }
+export function isAuthenticated() { return !!accessToken && !!currentUser; }
 
-function isCacheValid(sheetName) {
-  return cache.data[sheetName] && (Date.now() - cache.timestamp[sheetName] < cache.TTL);
+// Load Google Identity Services script + init token client
+export function initGoogleAuth() {
+  if (!document.querySelector('script[src*="accounts.google.com/gsi/client"]')) {
+    const s = document.createElement('script');
+    s.src = 'https://accounts.google.com/gsi/client';
+    s.async = true;
+    document.head.appendChild(s);
+  }
+  (function poll() {
+    if (typeof google !== 'undefined' && google.accounts) {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: async (r) => {
+          if (r.access_token) {
+            accessToken = r.access_token;
+            localStorage.setItem('ee_gat', accessToken);
+            try { await fetchUserInfo(); } catch (e) { console.error(e); }
+            notify();
+          }
+        },
+      });
+      // Validate stored token
+      if (accessToken) validateToken();
+      else notify();
+    } else setTimeout(poll, 250);
+  })();
 }
 
-// ============================================================
-// Fetch raw sheet data from Google Sheets API
-// ============================================================
-async function fetchSheet(sheetName) {
-  if (isCacheValid(sheetName)) {
-    return cache.data[sheetName];
-  }
+export function signIn() {
+  if (tokenClient) tokenClient.requestAccessToken({ prompt: 'consent' });
+}
 
-  if (!API_KEY) {
-    console.warn('Google Sheets API key not set. Add VITE_GOOGLE_SHEETS_API_KEY to .env');
-    return null;
-  }
+export function signOut() {
+  accessToken = null; currentUser = null;
+  localStorage.removeItem('ee_gat');
+  localStorage.removeItem('ee_user');
+  notify();
+}
 
+async function fetchUserInfo() {
+  const r = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!r.ok) throw new Error('User info fetch failed');
+  const info = await r.json();
+  const approved = APPROVED_USERS[info.email];
+  if (!approved) {
+    signOut();
+    throw new Error(`Access denied: ${info.email} is not an approved user`);
+  }
+  currentUser = { name: approved.name, email: info.email, team: approved.team, isAdmin: approved.isAdmin };
+  localStorage.setItem('ee_user', JSON.stringify(currentUser));
+}
+
+async function validateToken() {
   try {
-    const url = `${BASE_URL}/${encodeURIComponent(sheetName)}?key=${API_KEY}&majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`;
-    const res = await fetch(url);
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      console.error(`Google Sheets error for "${sheetName}":`, err);
-      return null;
-    }
-
-    const json = await res.json();
-    const rows = json.values || [];
-
-    cache.data[sheetName] = rows;
-    cache.timestamp[sheetName] = Date.now();
-
-    return rows;
-  } catch (e) {
-    console.error(`Failed to fetch sheet "${sheetName}":`, e);
-    return null;
-  }
+    const r = await fetch(`https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=${accessToken}`);
+    if (!r.ok) signOut();
+    else notify();
+  } catch { signOut(); }
 }
 
-// ============================================================
-// Parse helpers
-// ============================================================
+// Try silent re-auth on 401
+async function refreshToken() {
+  return new Promise((resolve, reject) => {
+    if (!tokenClient) return reject(new Error('No token client'));
+    const orig = tokenClient.callback;
+    let done = false;
+    tokenClient.callback = (r) => {
+      if (done) return; done = true; tokenClient.callback = orig;
+      if (r.access_token) {
+        accessToken = r.access_token;
+        localStorage.setItem('ee_gat', accessToken);
+        resolve();
+      } else reject(new Error('Re-auth failed'));
+    };
+    tokenClient.requestAccessToken({ prompt: '' });
+    setTimeout(() => { if (!done) { done = true; tokenClient.callback = orig; reject(new Error('Timeout')); } }, 10000);
+  });
+}
+
+// ---- Cache ----
+const cache = { data: {}, ts: {}, TTL: 5 * 60 * 1000 };
+function cacheOk(k) { return cache.data[k] && (Date.now() - cache.ts[k] < cache.TTL); }
+
+// ---- Fetch sheet with auth ----
+async function fetchSheet(sheetName) {
+  if (cacheOk(sheetName)) return cache.data[sheetName];
+  if (!accessToken) return null;
+
+  const url = `${BASE_URL}/${encodeURIComponent(sheetName)}?majorDimension=ROWS&valueRenderOption=UNFORMATTED_VALUE`;
+  let res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+
+  if (res.status === 401) {
+    try { await refreshToken(); } catch { signOut(); return null; }
+    res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  }
+  if (!res.ok) { console.error(`Sheets ${res.status} for ${sheetName}`); return null; }
+
+  const rows = (await res.json()).values || [];
+  cache.data[sheetName] = rows;
+  cache.ts[sheetName] = Date.now();
+  return rows;
+}
+
+// ---- Config ----
+const SHEET_CONFIG = {
+  '00_GHOST': { tag: 'GST_assy', name: 'Ghost (Full Robot)', icon: '🤖', color: '#f59e0b', dataStart: 2, snCol: 1, fields: { assembler: 4, time: 5, completionDate: 6, notes: 7 }, components: { 17: 'MBB', 19: 'PLR', 21: 'HBD', 23: 'ARM', 25: 'DPK' } },
+  '01_L-motor': { tag: 'LAC_assy', name: 'L-Motor', icon: '⚙️', color: '#6366f1', dataStart: 2, snCol: 1, fields: { mod: 2, usage: 3, partsDate: 6, assembler: 7, time: 8, completionDate: 9, notes: 10 }, ecnStart: 17 },
+  '02_A12-motor': { tag: 'A12_assy', name: 'A12 Motor', icon: '⚙️', color: '#0ea5e9', dataStart: 2, snCol: 1, fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 15 },
+  '03_A35-motor': { tag: 'A35_assy', name: 'A35 Motor', icon: '⚙️', color: '#14b8a6', dataStart: 2, snCol: 1, fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 18 },
+  '04_A4-motor': { tag: 'A4A_assy', name: 'A4 Motor', icon: '⚙️', color: '#a855f7', dataStart: 2, snCol: 1, fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 18 },
+  '05_Mobile Base': { tag: 'MBB_assy', name: 'Mobile Base', icon: '🔩', color: '#8b5cf6', dataStart: 2, snCol: 1, fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 24 },
+  '06_Pillar': { tag: 'PLR_assy', name: 'Pillar', icon: '🏗️', color: '#ec4899', dataStart: 2, snCol: 1, fields: { partsDate: 4, assembler: 5, time: 6, completionDate: 7, notes: 8 }, ecnStart: 18 },
+  '07_Head & Body': { tag: 'HBD_assy', name: 'Head & Body', icon: '🤖', color: '#f59e0b', dataStart: 2, snCol: 1, fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 22 },
+  '08_Gripper': { tag: 'GPR_assy', name: 'Gripper', icon: '🦾', color: '#22c55e', dataStart: 2, snCol: 1, fields: { usage: 2, partsDate: 5, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 15 },
+  '09_Arm': { tag: 'ARM_assy', name: 'Arm', icon: '💪', color: '#3b82f6', dataStart: 2, snCol: 1, fields: { partsDate: 4, assembler: 7, time: 8, completionDate: 9, notes: 10 }, ecnStart: 31, motorCols: { 13: 'A1', 15: 'A2', 17: 'A3', 19: 'A4', 21: 'A5', 23: 'GPR' } },
+  '10_Deploy Kit': { tag: 'DPK_assy', name: 'Deploy Kit', icon: '📦', color: '#f97316', dataStart: 2, snCol: 1, fields: { partsDate: 4, assembler: 6, time: 7, completionDate: 8, notes: 9 }, ecnStart: 12 },
+};
+
+// ---- Helpers ----
 function cell(row, col) {
   if (!row || col >= row.length) return null;
   const v = row[col];
-  if (v === '' || v === null || v === undefined) return null;
-  return v;
+  return (v === '' || v === null || v === undefined) ? null : v;
 }
-
-function isValidSN(val) {
-  if (!val) return false;
-  const s = String(val);
-  return s.startsWith('GT') || s.startsWith('FX');
-}
-
+function isValidSN(val) { return val && (String(val).startsWith('GT') || String(val).startsWith('FX')); }
 function parseEcnStatus(val) {
   if (val === null || val === undefined || val === '') return null;
   const s = String(val).toLowerCase();
@@ -154,65 +159,42 @@ function parseEcnStatus(val) {
   if (s === 'false' || s === '0') return 'pending';
   if (s.includes('変更前')) return 'not_required';
   if (s === '不明') return 'unknown';
-  return 'partial'; // has value but not true/false
+  return 'partial';
 }
 
-// ============================================================
-// Public API
-// ============================================================
+// ---- Public API ----
 
-/**
- * Get all assembly types with live unit counts from Google Sheets
- */
 export async function fetchAssemblyTypesFromSheets() {
   const results = [];
-
   for (const [sheetName, config] of Object.entries(SHEET_CONFIG)) {
     const rows = await fetchSheet(sheetName);
     let unitCount = 0;
-
     if (rows) {
       for (let i = config.dataStart; i < rows.length; i++) {
         if (isValidSN(cell(rows[i], config.snCol))) unitCount++;
       }
     }
-
     results.push({
-      id: config.tag.replace('_assy', ''),
-      tag: config.tag,
-      name: config.name,
-      icon: config.icon,
-      color: config.color,
-      description: `${sheetName} — ${unitCount} units`,
-      unitCount,
-      outdatedCount: 0, // will compute from ECN data
-      version: '1.0',
-      sheetName,
+      id: config.tag.replace('_assy', ''), tag: config.tag, name: config.name,
+      icon: config.icon, color: config.color, description: `${sheetName} — ${unitCount} units`,
+      unitCount, outdatedCount: 0, version: '1.0', sheetName,
     });
   }
-
   return results;
 }
 
-/**
- * Fetch all units for an assembly (by sheet name)
- */
 export async function fetchUnitsFromSheet(sheetName) {
   const config = SHEET_CONFIG[sheetName];
   if (!config) return [];
-
   const rows = await fetchSheet(sheetName);
   if (!rows) return [];
 
-  // Get ECN column names from header row (row 0)
   const ecnColumns = [];
   if (config.ecnStart) {
-    const headerRow = rows[0] || [];
-    for (let col = config.ecnStart; col < headerRow.length; col++) {
-      const h = cell(headerRow, col);
-      if (h && String(h).includes('ECN')) {
-        ecnColumns.push({ col, name: String(h).replace(/\n/g, ' ') });
-      }
+    const hdr = rows[0] || [];
+    for (let col = config.ecnStart; col < hdr.length; col++) {
+      const h = cell(hdr, col);
+      if (h && String(h).includes('ECN')) ecnColumns.push({ col, name: String(h).replace(/\n/g, ' ') });
     }
   }
 
@@ -221,132 +203,56 @@ export async function fetchUnitsFromSheet(sheetName) {
     const row = rows[i];
     const sn = cell(row, config.snCol);
     if (!isValidSN(sn)) continue;
-
     const f = config.fields;
 
-    // Parse ECN statuses
     const ecnStatuses = {};
     let pendingEcns = 0;
-    for (const ecnCol of ecnColumns) {
-      const status = parseEcnStatus(cell(row, ecnCol.col));
-      if (status) {
-        ecnStatuses[ecnCol.name] = {
-          status,
-          rawValue: String(cell(row, ecnCol.col) || ''),
-        };
-        if (status === 'pending') pendingEcns++;
-      }
+    for (const ec of ecnColumns) {
+      const st = parseEcnStatus(cell(row, ec.col));
+      if (st) { ecnStatuses[ec.name] = { status: st, rawValue: String(cell(row, ec.col) || '') }; if (st === 'pending') pendingEcns++; }
     }
 
-    // Parse component links (for Ghost and Arm)
     const components = {};
-    if (config.components) {
-      for (const [col, type] of Object.entries(config.components)) {
-        const compSn = cell(row, parseInt(col));
-        if (compSn && String(compSn).startsWith('GT')) {
-          components[type] = String(compSn);
-        }
-      }
+    for (const [col, type] of Object.entries(config.components || {})) {
+      const v = cell(row, parseInt(col)); if (v && String(v).startsWith('GT')) components[type] = String(v);
     }
-    if (config.motorCols) {
-      for (const [col, type] of Object.entries(config.motorCols)) {
-        const compSn = cell(row, parseInt(col));
-        if (compSn && String(compSn).startsWith('GT')) {
-          components[type] = String(compSn);
-        }
-      }
+    for (const [col, type] of Object.entries(config.motorCols || {})) {
+      const v = cell(row, parseInt(col)); if (v && String(v).startsWith('GT')) components[type] = String(v);
     }
 
     units.push({
-      sn: String(sn),
-      usage: f.usage ? String(cell(row, f.usage) || '') : '',
+      sn: String(sn), usage: f.usage ? String(cell(row, f.usage) || '') : '',
       assembler: f.assembler ? String(cell(row, f.assembler) || '') : '',
       assemblyTime: f.time ? cell(row, f.time) : null,
       completionDate: f.completionDate ? cell(row, f.completionDate) : null,
-      partsDate: f.partsDate ? cell(row, f.partsDate) : null,
       notes: f.notes ? String(cell(row, f.notes) || '') : '',
-      ecnStatuses,
-      pendingEcns,
-      components,
-      // For compatibility with existing app structure
-      version: '1.0',
-      latestVersion: '1.0',
+      ecnStatuses, pendingEcns, components,
+      version: '1.0', latestVersion: '1.0',
       status: pendingEcns > 0 ? 'outdated' : 'current',
     });
   }
-
   return units;
 }
 
-/**
- * Fetch ECN column definitions for a sheet
- */
 export async function fetchEcnColumnsFromSheet(sheetName) {
   const config = SHEET_CONFIG[sheetName];
   if (!config || !config.ecnStart) return [];
-
   const rows = await fetchSheet(sheetName);
-  if (!rows || rows.length === 0) return [];
-
-  const headerRow = rows[0] || [];
-  const ecnColumns = [];
-  for (let col = config.ecnStart; col < headerRow.length; col++) {
-    const h = cell(headerRow, col);
-    if (h) {
-      const name = String(h).replace(/\n/g, ' ');
-      if (name.includes('ECN') || name.includes('ecn')) {
-        ecnColumns.push({ col, name, code: name.split(' ')[0] });
-      }
-    }
+  if (!rows || !rows.length) return [];
+  const hdr = rows[0] || [];
+  const cols = [];
+  for (let col = config.ecnStart; col < hdr.length; col++) {
+    const h = cell(hdr, col);
+    if (h) { const name = String(h).replace(/\n/g, ' '); if (name.includes('ECN')) cols.push({ col, name, code: name.split(' ')[0] }); }
   }
-
-  return ecnColumns;
+  return cols;
 }
 
-/**
- * Get component traceability for a Ghost robot
- * Returns { MBB: 'GT414-MBB-00001', PLR: 'GT417-PLR-00001', ... }
- */
-export async function fetchGhostComponents(ghostSn) {
-  const units = await fetchUnitsFromSheet('00_GHOST');
-  const ghost = units.find((u) => u.sn === ghostSn);
-  return ghost?.components || {};
-}
-
-/**
- * Get motor/gripper traceability for an Arm
- */
-export async function fetchArmComponents(armSn) {
-  const units = await fetchUnitsFromSheet('09_Arm');
-  const arm = units.find((u) => u.sn === armSn);
-  return arm?.components || {};
-}
-
-/**
- * Force refresh cache for a sheet (or all sheets)
- */
 export function clearSheetCache(sheetName) {
-  if (sheetName) {
-    delete cache.data[sheetName];
-    delete cache.timestamp[sheetName];
-  } else {
-    cache.data = {};
-    cache.timestamp = {};
-  }
+  if (sheetName) { delete cache.data[sheetName]; delete cache.ts[sheetName]; }
+  else { cache.data = {}; cache.ts = {}; }
 }
 
-/**
- * Check if Google Sheets API is configured
- */
-export function isSheetsConfigured() {
-  return !!API_KEY;
-}
+export function isSheetsConfigured() { return !!accessToken; }
 
-/**
- * Get config for a sheet
- */
-export function getSheetConfig(sheetName) {
-  return SHEET_CONFIG[sheetName] || null;
-}
-
-export { SHEET_CONFIG };
+export { SHEET_CONFIG, APPROVED_USERS };

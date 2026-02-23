@@ -324,3 +324,145 @@ export async function checkConnection() {
     return { connected: false, error: e.message };
   }
 }
+
+// ============================================================
+// ADMIN: Assembly CRUD
+// ============================================================
+
+export async function fetchAllAssemblies() {
+  const { data, error } = await supabase.from(T.assemblies).select('*').order('id');
+  if (error) { console.error('fetchAllAssemblies:', error); return []; }
+  return data.map((a) => ({ ...a, display: ASSEMBLY_DISPLAY[a.tag] || { name: a.tag, icon: '📦', color: '#888' } }));
+}
+
+export async function updateAssemblyVersion(id, version) {
+  const { error } = await supabase.from(T.assemblies).update({ version, updated_at: new Date().toISOString() }).eq('id', id);
+  return !error;
+}
+
+// ============================================================
+// ADMIN: Group CRUD
+// ============================================================
+
+export async function createGroup(assemblyId, label, icon, color, sortOrder) {
+  const { data, error } = await supabase.from(T.groups).insert({ assembly_id: assemblyId, label, icon: icon || '📦', color: color || '#8b8fa3', sort_order: sortOrder }).select().single();
+  if (error) { console.error('createGroup:', error); return null; }
+  return data;
+}
+
+export async function updateGroup(id, updates) {
+  const { error } = await supabase.from(T.groups).update(updates).eq('id', id);
+  return !error;
+}
+
+export async function deleteGroup(id) {
+  const { error } = await supabase.from(T.groups).delete().eq('id', id);
+  return !error;
+}
+
+// ============================================================
+// ADMIN: Step CRUD
+// ============================================================
+
+export async function createStep(groupId, label, seqTag, sortOrder, type) {
+  const { data, error } = await supabase.from(T.steps).insert({ group_id: groupId, label, seq_tag: seqTag, sort_order: sortOrder, type: type || 'step' }).select().single();
+  if (error) { console.error('createStep:', error); return null; }
+  return data;
+}
+
+export async function updateStep(id, updates) {
+  const { error } = await supabase.from(T.steps).update(updates).eq('id', id);
+  return !error;
+}
+
+export async function deleteStep(id) {
+  // Delete parts and fasteners first
+  await supabase.from(T.parts).delete().eq('step_id', id);
+  await supabase.from(T.fasteners).delete().eq('step_id', id);
+  const { error } = await supabase.from(T.steps).delete().eq('id', id);
+  return !error;
+}
+
+// ============================================================
+// ADMIN: Parts CRUD
+// ============================================================
+
+export async function fetchStepParts(stepId) {
+  const { data, error } = await supabase.from(T.parts).select('*').eq('step_id', stepId).order('sort_order');
+  if (error) { console.error('fetchStepParts:', error); return []; }
+  return data;
+}
+
+export async function createPart(stepId, pn, name, qty, sortOrder) {
+  const { data, error } = await supabase.from(T.parts).insert({ step_id: stepId, pn, name, qty: qty || 1, sort_order: sortOrder || 0 }).select().single();
+  if (error) { console.error('createPart:', error); return null; }
+  return data;
+}
+
+export async function updatePart(id, updates) {
+  const { error } = await supabase.from(T.parts).update(updates).eq('id', id);
+  return !error;
+}
+
+export async function deletePart(id) {
+  const { error } = await supabase.from(T.parts).delete().eq('id', id);
+  return !error;
+}
+
+// ============================================================
+// ADMIN: Fasteners CRUD
+// ============================================================
+
+export async function fetchStepFasteners(stepId) {
+  const { data, error } = await supabase.from(T.fasteners).select('*').eq('step_id', stepId).order('sort_order');
+  if (error) { console.error('fetchStepFasteners:', error); return []; }
+  return data;
+}
+
+export async function createFastener(stepId, code, torque, loctite, qty, sortOrder) {
+  const { data, error } = await supabase.from(T.fasteners).insert({ step_id: stepId, code, torque, loctite, qty: qty || 1, sort_order: sortOrder || 0 }).select().single();
+  if (error) { console.error('createFastener:', error); return null; }
+  return data;
+}
+
+export async function updateFastener(id, updates) {
+  const { error } = await supabase.from(T.fasteners).update(updates).eq('id', id);
+  return !error;
+}
+
+export async function deleteFastener(id) {
+  const { error } = await supabase.from(T.fasteners).delete().eq('id', id);
+  return !error;
+}
+
+// ============================================================
+// ADMIN: ECN Log
+// ============================================================
+
+export async function fetchEcnLog(assemblyId) {
+  const { data, error } = await supabase.from(T.ecnLog).select('*').eq('assembly_id', assemblyId).order('created_at', { ascending: false });
+  if (error) { console.error('fetchEcnLog:', error); return []; }
+  return data;
+}
+
+export async function createEcnEntry(assemblyId, ecnCode, description, fromVersion, toVersion) {
+  const { data, error } = await supabase.from(T.ecnLog).insert({ assembly_id: assemblyId, ecn_code: ecnCode, description, from_version: fromVersion, to_version: toVersion, status: 'approved', created_at: new Date().toISOString() }).select().single();
+  if (error) { console.error('createEcnEntry:', error); return null; }
+  return data;
+}
+
+// ============================================================
+// ADMIN: Bulk unit version update
+// ============================================================
+
+export async function bulkUpdateUnitVersions(unitSns, newVersion, newStatus) {
+  const results = await Promise.all(
+    unitSns.map((sn) =>
+      supabase.from(T.units).update({ version: newVersion, status: newStatus || 'current', updated_at: new Date().toISOString() }).eq('sn', sn)
+    )
+  );
+  const errors = results.filter((r) => r.error);
+  return { success: unitSns.length - errors.length, failed: errors.length };
+}
+
+export { T, ASSEMBLY_DISPLAY };

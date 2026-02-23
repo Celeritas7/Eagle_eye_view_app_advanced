@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { fetchTree, saveStepOrder } from '../data/supabase';
+import { supabase, fetchTree, saveStepOrder } from '../data/supabase';
 import { fetchEcnColumnsFromSheet, clearSheetCache } from '../data/googleSheets';
 import { computeCascade } from '../data/cascadeEngine';
 import { getTheme, mono } from '../theme';
@@ -32,7 +32,6 @@ export default function AssemblyViewPage({ dark, role, assemblyType, selectedUni
       let treeData = [];
       if (assemblyType.tag) {
         // Find assembly in Supabase by tag
-        const { supabase } = await import('../data/supabase');
         const { data: assy } = await supabase
           .from('eagle_eye_app_assemblies')
           .select('id')
