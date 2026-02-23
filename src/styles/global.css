@@ -1,0 +1,42 @@
+/* ============================================================
+   EagleEye v2 — Global Styles
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Noto Sans', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2e3d; border-radius: 3px; }
+.light ::-webkit-scrollbar-thumb { background: #d1d5db; }
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Select dropdown fix */
+select option {
+  background: #1a1d27;
+  color: #e2e4eb;
+}
+.light select option {
+  background: #ffffff;
+  color: #111827;
+}
