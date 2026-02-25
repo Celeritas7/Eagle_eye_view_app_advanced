@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { ROLES } from './data/constants';
 import { getTheme, mono, sans } from './theme';
-import { initAuth, onAuthChange, isAuthenticated, getUser, signIn, signOut } from './data/auth';
+import { initGoogleAuth, onAuthChange, isAuthenticated, getUser, signIn, signOut } from './data/googleSheets';
 import HomePage from './pages/HomePage';
 import UnitSelectionPage from './pages/UnitSelectionPage';
 import AssemblyViewPage from './pages/AssemblyViewPage';
@@ -11,24 +12,20 @@ export default function App() {
   const [page, setPage] = useState('home');
   const [selectedType, setSelectedType] = useState(null);
   const [selectedUnits, setSelectedUnits] = useState([]);
-  const [authed, setAuthed] = useState(false);
+  const [authed, setAuthed] = useState(isAuthenticated());
   const [authLoading, setAuthLoading] = useState(true);
   const t = getTheme(dark);
   const user = getUser();
-  const role = user?.role || 'viewer';
+  const role = user?.isAdmin ? 'admin' : 'operator';
 
   useEffect(() => {
-    // Initialize Supabase Auth (checks existing session + OAuth redirect)
-    initAuth().then(() => {
-      setAuthed(isAuthenticated());
-      setAuthLoading(false);
-    });
-
+    initGoogleAuth();
     const unsub = onAuthChange(() => {
       setAuthed(isAuthenticated());
       setAuthLoading(false);
     });
-
+    // Fallback if auth resolves quickly
+    setTimeout(() => setAuthLoading(false), 2000);
     return unsub;
   }, []);
 
@@ -65,7 +62,7 @@ export default function App() {
 
               <div style={{ marginTop: 20, padding: '12px 16px', borderRadius: 10, background: `${t.textMuted}08`, border: `1px solid ${t.border}` }}>
                 <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.6 }}>
-                  Authorized users only. Contact admin for access.
+                  Authorized users only. Uses the same Google account as Ghost Tracker.
                 </div>
               </div>
             </>
@@ -81,8 +78,8 @@ export default function App() {
 
       {/* Top bar */}
       <div style={{ position: 'fixed', top: 12, right: 12, zIndex: 50, display: 'flex', gap: 6, alignItems: 'center' }}>
-        <div style={{ padding: '5px 10px', borderRadius: 8, background: t.bgCard, border: `1px solid ${t.border}`, fontSize: 11, color: role === 'admin' ? '#f59e0b' : role === 'operator' ? '#22c55e' : '#6b7280', fontWeight: 700, fontFamily: mono }}>
-          {role === 'admin' ? '🔧 Admin' : role === 'operator' ? '🔨 Operator' : '👁 Viewer'} · {user?.name}
+        <div style={{ padding: '5px 10px', borderRadius: 8, background: t.bgCard, border: `1px solid ${t.border}`, fontSize: 11, color: role === 'admin' ? '#f59e0b' : '#22c55e', fontWeight: 700, fontFamily: mono }}>
+          {role === 'admin' ? '🔧 Admin' : '🔨 Operator'} · {user?.name}
         </div>
         <button onClick={signOut} style={{ background: t.bgCard, border: `1px solid ${t.border}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', color: '#ef4444', fontSize: 10, fontWeight: 600 }}>
           Logout
