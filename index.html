@@ -1,14 +1,775 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>⬡ EagleEye v2</title>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>" />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Noto+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>⬡ EagleEye — Assembly Tracking</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body, #root { height: 100%; }
+    body { background: #0a0b0f; color: #d1d5e4; font-family: 'DM Sans', sans-serif; -webkit-font-smoothing: antialiased; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #0a0b0f; }
+    ::-webkit-scrollbar-thumb { background: #1e2030; border-radius: 2px; }
+    select option { background: #12131a; color: #d1d5e4; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+  </style>
+
+  <!-- Keys loaded from separate file (gitignored) -->
+  <script src="config.js"></script>
+
+  <!-- CDN deps — no build step needed -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" crossorigin></script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useRef, useMemo, useCallback, createContext, useContext } = React;
+
+// ═══════════════════════════════════════════════════════════
+// CONFIG GATE — Block app if config.js is missing
+// ═══════════════════════════════════════════════════════════
+const CFG = window.EAGLE_EYE_CONFIG;
+if (!CFG || !CFG.SUPABASE_URL || !CFG.SUPABASE_ANON_KEY) {
+  document.getElementById('root').innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:'DM Sans',sans-serif;color:#d1d5e4;text-align:center;padding:40px">
+      <div style="font-size:48px;margin-bottom:16px">🔒</div>
+      <div style="font-size:22px;font-weight:700;margin-bottom:10px;color:#ef4444">Config Missing</div>
+      <div style="font-size:14px;color:#6b7080;max-width:420px;line-height:1.7">
+        <code style="background:#1e2030;padding:3px 8px;border-radius:4px;font-size:12px">config.js</code> not found or incomplete.<br><br>
+        Copy <code style="background:#1e2030;padding:3px 8px;border-radius:4px;font-size:12px">config.template.js</code> to
+        <code style="background:#1e2030;padding:3px 8px;border-radius:4px;font-size:12px">config.js</code><br>
+        and fill in your Supabase URL + anon key.
+      </div>
+    </div>`;
+  throw new Error("EagleEye: config.js missing or incomplete");
+}
+
+// ═══════════════════════════════════════════════════════════
+// SUPABASE CLIENT
+// ═══════════════════════════════════════════════════════════
+const supabase = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY);
+
+// ═══════════════════════════════════════════════════════════
+// THEME & CONSTANTS
+// ═══════════════════════════════════════════════════════════
+const mono = "'JetBrains Mono','Fira Code',monospace";
+const sans = "'DM Sans','Segoe UI',sans-serif";
+const T = {
+  bg: "#0a0b0f", bgCard: "#12131a", bgHover: "#1a1c24", bgModal: "#15161e",
+  border: "#1e2030", text: "#d1d5e4", textMuted: "#6b7080", textDim: "#3a3d4d",
+  accent: "#f59e0b", headerBg: "#0e0f15", shadow: "0 12px 40px rgba(0,0,0,0.6)",
+};
+const inp = { background: "#0d0e14", border: `1px solid ${T.border}`, borderRadius: 6, padding: "5px 8px", color: T.text, fontSize: 11, fontFamily: mono, outline: "none" };
+const btnSm = (c, b) => ({ padding: "3px 10px", borderRadius: 6, fontSize: 10, fontWeight: 700, border: `1px solid ${b || T.border}`, background: `${c}12`, color: c, cursor: "pointer", fontFamily: mono });
+
+// ═══════════════════════════════════════════════════════════
+// AUTH CONTEXT — Google OAuth via Supabase
+// ═══════════════════════════════════════════════════════════
+const AuthContext = createContext(null);
+
+function AuthProvider({ children }) {
+  const [session, setSession] = useState(null);
+  const [role, setRole] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchRole(session.user.email);
+      else setLoading(false);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchRole(session.user.email);
+      else { setRole(null); setLoading(false); }
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchRole = async (email) => {
+    const { data } = await supabase.from('authentication_mode_user_roles').select('role').eq('email', email).single();
+    setRole(data?.role || 'viewer');
+    setLoading(false);
+  };
+
+  const login = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin + window.location.pathname }
+    });
+  };
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setRole(null);
+  };
+
+  return (
+    <AuthContext.Provider value={{ session, role, loading, login, logout, user: session?.user }}>
+      {children}
+    </AuthContext.Provider>
+  );
+}
+
+function useAuth() { return useContext(AuthContext); }
+
+// ═══════════════════════════════════════════════════════════
+// LOGIN SCREEN
+// ═══════════════════════════════════════════════════════════
+function LoginScreen() {
+  const { login } = useAuth();
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", background: T.bg, padding: 40 }}>
+      <div style={{ position: "fixed", inset: 0, pointerEvents: "none", background: "radial-gradient(ellipse at 50% 30%, rgba(245,158,11,0.06) 0%, transparent 70%)" }} />
+      <div style={{ position: "relative", zIndex: 1, textAlign: "center" }}>
+        <div style={{ width: 80, height: 80, borderRadius: 24, margin: "0 auto 20px", background: "linear-gradient(135deg, #f59e0b, #ef4444)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 42, boxShadow: "0 12px 48px rgba(245,158,11,0.3)" }}>⬡</div>
+        <div style={{ fontSize: 32, fontWeight: 900, color: T.accent, fontFamily: mono, letterSpacing: -2, marginBottom: 6 }}>EagleEye</div>
+        <div style={{ fontSize: 14, color: T.textMuted, marginBottom: 40, fontFamily: sans }}>Assembly version tracking & ECN management</div>
+        <button onClick={login} style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 32px", borderRadius: 12, border: `1px solid ${T.border}`, background: T.bgCard, color: T.text, fontSize: 15, fontWeight: 600, cursor: "pointer", fontFamily: sans, transition: "all 0.2s", margin: "0 auto" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.boxShadow = `0 4px 20px ${T.accent}20`; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.boxShadow = "none"; }}>
+          <svg width="20" height="20" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+          Sign in with Google
+        </button>
+        <div style={{ fontSize: 11, color: T.textDim, marginTop: 24, textAlign: "center", maxWidth: 300, lineHeight: 1.6, margin: "24px auto 0" }}>
+          Access is controlled by your organization admin.<br/>Only approved accounts can sign in.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════
+// DATA LAYER — All Supabase queries (correct table names)
+// ═══════════════════════════════════════════════════════════
+const DB = {
+  // Assemblies
+  async getAssemblies() {
+    const { data, error } = await supabase.from('eagle_eye_app_assemblies').select('*').order('code');
+    if (error) console.error('getAssemblies:', error);
+    return data || [];
+  },
+
+  // Units for an assembly
+  async getUnits(assemblyId) {
+    const { data, error } = await supabase.from('eagle_eye_app_production_units').select('*').eq('assembly_id', assemblyId).order('sn');
+    if (error) console.error('getUnits:', error);
+    return data || [];
+  },
+
+  // Active version for an assembly
+  async getActiveVersion(assemblyId) {
+    const { data } = await supabase.from('eagle_eye_app_version_history').select('*').eq('assembly_id', assemblyId).eq('status', 'active').single();
+    return data;
+  },
+
+  // All versions for an assembly
+  async getVersions(assemblyId) {
+    const { data } = await supabase.from('eagle_eye_app_version_history').select('*').eq('assembly_id', assemblyId).order('version');
+    return data || [];
+  },
+
+  // Full tree: groups → steps → parts + fasteners
+  async getTree(versionId) {
+    const { data: groups } = await supabase.from('eagle_eye_app_groups').select('*').eq('version_id', versionId).order('sequence');
+    if (!groups) return [];
+
+    const { data: steps } = await supabase.from('eagle_eye_app_steps').select('*').eq('version_id', versionId).order('sequence');
+    const stepIds = (steps || []).map(s => s.id);
+
+    const { data: stepLinks } = await supabase.from('eagle_eye_app_step_links').select('*, master_parts_list_all(part_number, name)').in('step_id', stepIds);
+    const { data: stepFasteners } = await supabase.from('eagle_eye_app_fasteners').select('*').in('step_id', stepIds);
+
+    return groups.map(g => ({
+      ...g,
+      steps: (steps || []).filter(s => s.group_id === g.id).map(s => ({
+        ...s,
+        parts: (stepLinks || []).filter(sl => sl.step_id === s.id).map(sl => ({
+          id: sl.id, pn: sl.master_parts_list_all?.part_number || '', name: sl.master_parts_list_all?.name || '', qty: sl.quantity,
+        })),
+        fasteners: (stepFasteners || []).filter(sf => sf.step_id === s.id).map(sf => ({
+          id: sf.id, code: sf.code || '', torque: sf.torque_nm ? `${sf.torque_nm}Nm` : '', loctite: sf.loctite_type || '', qty: sf.quantity,
+        })),
+      }))
+    }));
+  },
+
+  // ECN changes for a version diff
+  async getECNChanges(fromVer, toVer, assemblyId) {
+    const { data } = await supabase
+      .from('eagle_eye_app_ecn_change_records')
+      .select('*')
+      .eq('assembly_id', assemblyId)
+      .order('seq_tag');
+    return data || [];
+  },
+
+  // Applied ECN marks for a unit
+  async getApplied(unitSn) {
+    const { data } = await supabase.from('eagle_eye_app_ecn_applications').select('*').eq('unit_sn', unitSn);
+    return new Set((data || []).map(d => `${d.unit_sn}-${d.seq_tag}`));
+  },
+
+  // Mark ECN as applied
+  async applyECN(unitSn, seqTag, stepId, userEmail) {
+    const { error } = await supabase.from('eagle_eye_app_ecn_applications').upsert({
+      unit_sn: unitSn, seq_tag: seqTag, step_id: stepId, applied: true, applied_by: userEmail, applied_at: new Date().toISOString(),
+    }, { onConflict: 'unit_sn,seq_tag' });
+    if (error) console.error('Apply ECN error:', error);
+    return !error;
+  },
+
+  // Undo ECN application
+  async unapplyECN(unitSn, seqTag) {
+    const { error } = await supabase.from('eagle_eye_app_ecn_applications').delete().eq('unit_sn', unitSn).eq('seq_tag', seqTag);
+    return !error;
+  },
+
+  // Upgrade unit version
+  async upgradeUnit(unitSn, newVersion) {
+    const { error } = await supabase.from('eagle_eye_app_production_units').update({
+      version: newVersion, status: 'current', updated_at: new Date().toISOString()
+    }).eq('sn', unitSn);
+    return !error;
+  },
+
+  // Master parts lookup
+  async searchParts(query) {
+    if (!query || query.length < 2) return [];
+    const { data } = await supabase.from('master_parts_list_all').select('part_number, name').ilike('part_number', `%${query}%`).limit(10);
+    return data || [];
+  },
+
+  // Audit log
+  async log(action, tableName, recordId, details) {
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from('authentication_mode_audit_log').insert({
+      user_email: user?.email, action, table_name: tableName, record_id: String(recordId), details,
+    });
+  },
+};
+
+
+// ═══════════════════════════════════════════════════════════
+// CASCADE ENGINE
+// ═══════════════════════════════════════════════════════════
+function chainOf(sn) { const m = (sn || '').match(/^(\d+)/); return m ? m[1] : sn; }
+function computeCascade(tree, changes, applied, unitSn) {
+  const flat = []; tree.forEach(g => (g.steps || []).forEach(s => flat.push({ sn: s.step_number || s.sn, chain: chainOf(s.step_number || s.sn) })));
+  const ecnSet = new Set(changes.map(c => c.step || c.seq_tag));
+  const r = new Map();
+  changes.forEach(ch => {
+    const tag = ch.step || ch.seq_tag;
+    const cc = chainOf(tag);
+    if (applied.has(`${unitSn}-${tag}`)) return;
+    const ci = flat.findIndex(s => s.sn === tag);
+    if (ci === -1) return;
+    for (let i = ci + 1; i < flat.length; i++) {
+      if (flat[i].chain !== cc) continue;
+      const e = r.get(flat[i].sn) || { isCascade: false, from: [], isBlocked: false };
+      e.isCascade = true; if (!e.from.includes(tag)) e.from.push(tag);
+      r.set(flat[i].sn, e);
+    }
+  });
+  changes.forEach(ch => {
+    const tag = ch.step || ch.seq_tag;
+    const cc = chainOf(tag), ci = flat.findIndex(s => s.sn === tag);
+    for (let i = 0; i < ci; i++) {
+      if (flat[i].chain !== cc) continue;
+      if (ecnSet.has(flat[i].sn) && !applied.has(`${unitSn}-${flat[i].sn}`)) {
+        const e = r.get(tag) || { isCascade: false, from: [], isBlocked: false };
+        e.isBlocked = true; if (!e.from.includes(flat[i].sn)) e.from.push(flat[i].sn);
+        r.set(tag, e);
+      }
+    }
+  });
+  return r;
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// TOP BAR
+// ═══════════════════════════════════════════════════════════
+function TopBar({ onHome }) {
+  const { user, role, logout } = useAuth();
+  const roleColors = { admin: "#f59e0b", operator: "#3b82f6", viewer: "#6b7080" };
+  const roleLabels = { admin: "🔧 Admin", operator: "🔨 Operator", viewer: "👁 Viewer" };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 16px", borderBottom: `1px solid ${T.border}`, background: T.headerBg, position: "sticky", top: 0, zIndex: 50 }}>
+      <div onClick={onHome} style={{ fontSize: 16, fontWeight: 800, color: T.accent, fontFamily: mono, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>⬡ <span style={{ fontSize: 13 }}>EagleEye</span></div>
+      <div style={{ flex: 1 }} />
+      <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 8px", borderRadius: 5, background: `${roleColors[role] || "#6b7080"}15`, color: roleColors[role] || "#6b7080", fontFamily: mono }}>{roleLabels[role] || role}</span>
+      <span style={{ fontSize: 10, color: T.textMuted, maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user?.user_metadata?.full_name || user?.email}</span>
+      <button onClick={logout} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: "3px 10px", color: T.textMuted, cursor: "pointer", fontSize: 9, fontFamily: sans }}>Logout</button>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// HOME PAGE — loads assemblies from DB
+// ═══════════════════════════════════════════════════════════
+function HomePage({ onNav }) {
+  const { role } = useAuth();
+  const [assemblies, setAssemblies] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { DB.getAssemblies().then(d => { setAssemblies(d); setLoading(false); }); }, []);
+
+  return (
+    <div style={{ padding: "40px 24px", maxWidth: 860, margin: "0 auto" }}>
+      {/* Hero */}
+      <div style={{ textAlign: "center", marginBottom: 40 }}>
+        <div style={{ fontSize: 15, color: T.textMuted, fontFamily: sans }}>Assembly version tracking & ECN management</div>
+      </div>
+
+      {/* Quick nav cards */}
+      <div style={{ display: "flex", gap: 16, justifyContent: "center", marginBottom: 40, flexWrap: "wrap" }}>
+        <div onClick={() => onNav("units")} style={{ width: 260, padding: "24px 20px", borderRadius: 14, background: T.bgCard, border: `2px solid ${T.accent}40`, cursor: "pointer", transition: "all 0.2s" }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.transform = "translateY(-3px)"; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = `${T.accent}40`; e.currentTarget.style.transform = "none"; }}>
+          <div style={{ fontSize: 30, marginBottom: 10 }}>🔨</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: T.accent, fontFamily: sans }}>Unit Tracking</div>
+          <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4, lineHeight: 1.5 }}>Check & apply ECN updates per unit</div>
+        </div>
+        {role === "admin" && (
+          <div onClick={() => onNav("editor")} style={{ width: 260, padding: "24px 20px", borderRadius: 14, background: T.bgCard, border: `2px solid #8b5cf640`, cursor: "pointer", transition: "all 0.2s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = "#8b5cf6"; e.currentTarget.style.transform = "translateY(-3px)"; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = "#8b5cf640"; e.currentTarget.style.transform = "none"; }}>
+            <div style={{ fontSize: 30, marginBottom: 10 }}>🔧</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#8b5cf6", fontFamily: sans }}>Tree Editor</div>
+            <div style={{ fontSize: 11, color: T.textMuted, marginTop: 4, lineHeight: 1.5 }}>Manage versions & assembly trees</div>
+          </div>
+        )}
+      </div>
+
+      {/* Stats bar */}
+      {!loading && assemblies.length > 0 && (
+        <div style={{ display: "flex", gap: 12, justifyContent: "center", marginBottom: 20 }}>
+          <div style={{ padding: "6px 14px", borderRadius: 8, background: T.bgCard, border: `1px solid ${T.border}`, textAlign: "center" }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: T.accent, fontFamily: mono }}>{assemblies.length}</div>
+            <div style={{ fontSize: 9, color: T.textMuted }}>Assemblies</div>
+          </div>
+        </div>
+      )}
+
+      {/* Assembly grid */}
+      {loading ? <div style={{ textAlign: "center", color: T.textMuted, padding: 40 }}>Loading assemblies...</div> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(190px,1fr))", gap: 10 }}>
+          {assemblies.map(a => (
+            <div key={a.id} onClick={() => onNav("units", a)} style={{ background: T.bgCard, border: `1px solid ${T.border}`, borderRadius: 12, padding: "16px 18px", cursor: "pointer", borderLeft: `3px solid ${T.accent}`, transition: "all 0.15s" }}
+              onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.borderColor = T.accent; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.borderColor = T.border; }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: T.text, fontFamily: sans, marginBottom: 4 }}>{a.name || a.code}</div>
+              <div style={{ fontSize: 10, color: T.textMuted }}>{a.description || a.code}</div>
+              <div style={{ marginTop: 8 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, padding: "2px 7px", borderRadius: 6, background: `${T.accent}12`, color: T.accent, fontFamily: mono }}>{a.code}</span>
+              </div>
+            </div>
+          ))}
+          {assemblies.length === 0 && <div style={{ gridColumn: "1/-1", textAlign: "center", color: T.textDim, padding: 40 }}>No assemblies found. Add them via Supabase.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// UNIT SELECTION — loads from DB
+// ═══════════════════════════════════════════════════════════
+function UnitSelectPage({ assembly, onBack, onProceed }) {
+  const [units, setUnits] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState(new Set());
+  const [filter, setFilter] = useState("all");
+  const [search, setSearch] = useState("");
+
+  useEffect(() => { DB.getUnits(assembly.id).then(d => { setUnits(d); setLoading(false); }); }, [assembly.id]);
+
+  const filtered = units.filter(u => {
+    if (filter === "outdated" && u.status !== "outdated") return false;
+    if (filter === "current" && u.status !== "current") return false;
+    if (search && !u.sn.toLowerCase().includes(search.toLowerCase())) return false;
+    return true;
+  });
+  const toggle = sn => { const n = new Set(sel); n.has(sn) ? n.delete(sn) : n.add(sn); setSel(n); };
+  const outCount = units.filter(u => u.status === "outdated").length;
+
+  return (
+    <div style={{ padding: "20px 24px", maxWidth: 900, margin: "0 auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+        <button onClick={onBack} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 7, padding: "5px 12px", color: T.textMuted, cursor: "pointer", fontSize: 11, fontFamily: sans }}>← Back</button>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: T.text, fontFamily: sans }}>{assembly.name || assembly.code}</div>
+          <div style={{ fontSize: 10, color: T.textMuted, fontFamily: mono }}>{units.length} total · <span style={{ color: "#ef4444", fontWeight: 700 }}>{outCount} need updates</span></div>
+        </div>
+      </div>
+
+      {/* Filters */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "center" }}>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search S/N..." style={{ ...inp, width: 160, fontSize: 11 }} />
+        {["all", "outdated", "current"].map(f => (
+          <button key={f} onClick={() => setFilter(f)} style={{ padding: "4px 10px", borderRadius: 7, fontSize: 10, fontWeight: 600, cursor: "pointer", fontFamily: sans, border: filter === f ? "none" : `1px solid ${T.border}`, background: filter === f ? (f === "outdated" ? "rgba(239,68,68,0.15)" : f === "current" ? "rgba(34,197,94,0.15)" : `${T.accent}20`) : "transparent", color: filter === f ? (f === "outdated" ? "#ef4444" : f === "current" ? "#22c55e" : T.accent) : T.textMuted, textTransform: "capitalize" }}>{f}</button>
+        ))}
+        <button onClick={() => { const n = new Set(sel); filtered.forEach(u => n.add(u.sn)); setSel(n); }} style={{ ...btnSm(T.textMuted), marginLeft: "auto", fontFamily: sans }}>Select all ({filtered.length})</button>
+      </div>
+
+      {/* Unit grid */}
+      {loading ? <div style={{ textAlign: "center", color: T.textMuted, padding: 40 }}>Loading units...</div> : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(135px,1fr))", gap: 4, maxHeight: 420, overflowY: "auto", padding: 2 }}>
+          {filtered.map(u => {
+            const s = sel.has(u.sn); const out = u.status === "outdated";
+            return (
+              <div key={u.sn} onClick={() => toggle(u.sn)} style={{ padding: "7px 9px", borderRadius: 7, cursor: "pointer", border: s ? `2px solid ${T.accent}` : `1px solid ${T.border}`, background: s ? `${T.accent}06` : T.bgCard, transition: "all 0.1s", position: "relative" }}>
+                {s && <div style={{ position: "absolute", top: 4, right: 6, fontSize: 11, color: T.accent }}>✓</div>}
+                <div style={{ fontSize: 11, fontWeight: 700, color: T.text, fontFamily: mono }}>{u.sn}</div>
+                <div style={{ display: "flex", gap: 3, marginTop: 2 }}>
+                  <span style={{ fontSize: 8, fontWeight: 700, padding: "1px 4px", borderRadius: 4, background: out ? "rgba(239,68,68,0.1)" : "rgba(34,197,94,0.1)", color: out ? "#ef4444" : "#22c55e", fontFamily: mono }}>v{u.version}</span>
+                  {out && <span style={{ fontSize: 7, color: "#ef4444" }}>→ v{u.latest_version}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Selection bar */}
+      {sel.size > 0 && (
+        <div style={{ marginTop: 12, padding: "9px 14px", borderRadius: 10, background: `${T.accent}06`, border: `1px solid ${T.accent}20`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontWeight: 700, color: T.text, fontSize: 12 }}>{sel.size} selected</span>
+          <button onClick={() => onProceed([...sel].map(sn => units.find(u => u.sn === sn)).filter(Boolean))} style={{ padding: "7px 20px", borderRadius: 9, fontSize: 12, fontWeight: 700, background: T.accent, border: "none", color: "#000", cursor: "pointer" }}>Open Assembly View →</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// ASSEMBLY VIEW — ECN tracking + tree display
+// ═══════════════════════════════════════════════════════════
+function AssemblyViewPage({ assembly, selectedUnits, onBack }) {
+  const { role, user } = useAuth();
+  const [tab, setTab] = useState("list");
+  const [unit, setUnit] = useState(selectedUnits[0]);
+  const [tree, setTree] = useState([]);
+  const [changes, setChanges] = useState([]);
+  const [applied, setApplied] = useState(new Set());
+  const [expanded, setExpanded] = useState(new Set());
+  const [modal, setModal] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      setLoading(true);
+      const ver = await DB.getActiveVersion(assembly.id);
+      if (ver) {
+        const t = await DB.getTree(ver.id);
+        setTree(t);
+        setExpanded(new Set(t.map(g => g.id)));
+      }
+      const ch = await DB.getECNChanges(unit.version, unit.latest_version, assembly.id);
+      setChanges(ch);
+      const ap = await DB.getApplied(unit.sn);
+      setApplied(ap);
+      setLoading(false);
+    }
+    load();
+  }, [unit.sn, assembly.id]);
+
+  const isOut = unit.status === "outdated";
+  const ecnSet = new Set(changes.map(c => c.seq_tag || c.step));
+  const cascade = computeCascade(tree, changes, applied, unit.sn);
+  const allDone = changes.length > 0 && changes.every(c => applied.has(`${unit.sn}-${c.seq_tag || c.step}`));
+  const appliedCount = [...applied].filter(k => k.startsWith(unit.sn)).length;
+  const canWrite = role === "admin" || role === "operator";
+
+  const togApply = async (ch) => {
+    const tag = ch.seq_tag || ch.step;
+    const key = `${unit.sn}-${tag}`;
+    if (applied.has(key)) {
+      if (await DB.unapplyECN(unit.sn, tag)) {
+        const n = new Set(applied); n.delete(key); setApplied(n);
+        DB.log('ecn_unapplied', 'eagle_eye_app_ecn_applications', tag, { unit: unit.sn });
+      }
+    } else {
+      if (await DB.applyECN(unit.sn, tag, ch.step_id, user?.email)) {
+        const n = new Set(applied); n.add(key); setApplied(n);
+        DB.log('ecn_applied', 'eagle_eye_app_ecn_applications', tag, { unit: unit.sn });
+      }
+    }
+  };
+
+  const handleUpgrade = async () => {
+    if (await DB.upgradeUnit(unit.sn, unit.latest_version)) {
+      DB.log('unit_upgraded', 'eagle_eye_app_production_units', unit.sn, { from: unit.version, to: unit.latest_version });
+      setUnit({ ...unit, version: unit.latest_version, status: "current" });
+    }
+  };
+
+  const TABS = [{ id: "list", label: "List View", icon: "☰" }, { id: "graph", label: "Graph", icon: "◈" }, { id: "kanban", label: "Kanban", icon: "▦" }];
+
+  if (loading) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", color: T.textMuted }}>Loading assembly data...</div>;
+
+  return (
+    <div style={{ minHeight: "calc(100vh - 36px)", background: T.bg }}>
+      {/* Sub-header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 16px", borderBottom: `1px solid ${T.border}`, background: T.headerBg, flexWrap: "wrap" }}>
+        <button onClick={onBack} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: "3px 10px", color: T.textMuted, cursor: "pointer", fontSize: 10, fontFamily: sans }}>← Units</button>
+        <select value={unit.sn} onChange={e => setUnit(selectedUnits.find(u => u.sn === e.target.value))} style={{ ...inp, padding: "4px 8px", fontSize: 11, fontWeight: 600 }}>
+          {selectedUnits.map(u => <option key={u.sn} value={u.sn}>{u.sn} — v{u.version} {u.status === "outdated" ? "⚠" : "✓"}</option>)}
+        </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "2px 8px", background: isOut ? "rgba(239,68,68,0.08)" : "rgba(34,197,94,0.08)", border: `1px solid ${isOut ? "rgba(239,68,68,0.2)" : "rgba(34,197,94,0.2)"}`, borderRadius: 12, fontSize: 10, fontWeight: 700, color: isOut ? "#ef4444" : "#22c55e", fontFamily: mono }}>
+          v{unit.version}{isOut && <span style={{ fontWeight: 400, opacity: 0.7 }}> → v{unit.latest_version}</span>}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{ display: "flex", alignItems: "center", padding: "0 16px", borderBottom: `1px solid ${T.border}`, background: T.headerBg }}>
+        {TABS.map(t => {
+          const active = tab === t.id;
+          return (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ display: "flex", alignItems: "center", gap: 4, padding: "8px 14px", fontSize: 11, fontWeight: active ? 700 : 500, color: active ? T.accent : T.textMuted, background: "transparent", border: "none", cursor: "pointer", borderBottom: active ? `2px solid ${T.accent}` : "2px solid transparent", fontFamily: sans }}>
+              <span style={{ fontSize: 12, opacity: active ? 1 : 0.5 }}>{t.icon}</span> {t.label}
+              {t.id === "list" && changes.length - appliedCount > 0 && <span style={{ fontSize: 8, fontWeight: 700, padding: "1px 5px", borderRadius: 5, background: "rgba(239,68,68,0.12)", color: "#ef4444", fontFamily: mono }}>{changes.length - appliedCount}</span>}
+              {(t.id === "graph" || t.id === "kanban") && <span style={{ fontSize: 7, padding: "1px 4px", borderRadius: 3, background: `${T.textDim}18`, color: T.textDim, fontFamily: mono }}>SOON</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* List Tab */}
+      {tab === "list" && (
+        <>
+          {/* ECN Banner */}
+          {isOut && changes.length > 0 && (
+            <div style={{ margin: "8px 16px 0", padding: "9px 12px", borderRadius: 9, background: "rgba(239,68,68,0.03)", border: "1px solid rgba(239,68,68,0.08)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 5 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: "#ef4444" }}>⚠ {changes.length} ECN changes</span>
+                <span style={{ fontSize: 9, color: T.textMuted, fontFamily: mono }}>{appliedCount}/{changes.length}</span>
+              </div>
+              <div style={{ height: 2, borderRadius: 1, background: "rgba(239,68,68,0.08)", overflow: "hidden" }}>
+                <div style={{ height: "100%", transition: "width 0.3s", width: changes.length > 0 ? `${(appliedCount / changes.length) * 100}%` : "0%", background: allDone ? "#22c55e" : "#f59e0b" }} />
+              </div>
+              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 2 }}>
+                {changes.map((c, i) => {
+                  const tag = c.seq_tag || c.step;
+                  const done = applied.has(`${unit.sn}-${tag}`);
+                  const info = cascade.get(tag);
+                  const blocked = info?.isBlocked && !done;
+                  return (
+                    <div key={i} onClick={() => !blocked && canWrite && togApply(c)} style={{ display: "flex", alignItems: "center", gap: 6, padding: "5px 8px", borderRadius: 5, background: done ? "rgba(34,197,94,0.04)" : T.bgCard, border: `1px solid ${done ? "rgba(34,197,94,0.1)" : T.border}`, cursor: blocked ? "not-allowed" : canWrite ? "pointer" : "default", opacity: blocked ? 0.5 : 1 }}>
+                      <span style={{ fontSize: 9, fontWeight: 700, color: done ? "#22c55e" : "#ef4444", fontFamily: mono, minWidth: 24, textAlign: "center", background: done ? "rgba(34,197,94,0.1)" : "rgba(239,68,68,0.08)", padding: "1px 4px", borderRadius: 3 }}>{tag}</span>
+                      <span style={{ flex: 1, fontSize: 10, color: T.text, fontWeight: 500, opacity: done ? 0.5 : 1, textDecoration: done ? "line-through" : "none" }}>{c.step_name || c.field || "Change"}</span>
+                      {c.field && <span style={{ fontSize: 8, color: T.textMuted, fontFamily: mono }}>{c.field}</span>}
+                      {blocked && <span style={{ fontSize: 9 }}>🔒</span>}
+                      <span style={{ fontSize: 11, color: done ? "#22c55e" : T.textDim }}>{done ? "✓" : "○"}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {allDone && (
+                <div style={{ marginTop: 8, padding: "10px 12px", borderRadius: 8, background: "rgba(34,197,94,0.05)", border: "1px solid rgba(34,197,94,0.2)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#22c55e" }}>✅ All changes applied</div>
+                  {canWrite && <button onClick={handleUpgrade} style={{ padding: "6px 18px", borderRadius: 8, fontSize: 11, fontWeight: 700, background: "#22c55e", border: "none", color: "#000", cursor: "pointer" }}>✓ Upgrade to v{unit.latest_version}</button>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Tree */}
+          <div style={{ padding: "8px 16px 40px", maxWidth: 960, margin: "0 auto" }}>
+            {tree.map(group => {
+              const open = expanded.has(group.id);
+              const steps = group.steps || [];
+              return (
+                <div key={group.id} style={{ marginBottom: 1 }}>
+                  <div onClick={() => { const n = new Set(expanded); n.has(group.id) ? n.delete(group.id) : n.add(group.id); setExpanded(n); }} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 12px", background: T.bgCard, borderLeft: `3px solid ${group.color || T.accent}`, cursor: "pointer" }}>
+                    <span style={{ color: T.textMuted, fontSize: 9, transform: open ? "rotate(90deg)" : "rotate(0)", transition: "transform 0.15s" }}>▶</span>
+                    <span style={{ fontSize: 13 }}>{group.icon || "📦"}</span>
+                    <span style={{ color: group.color || T.accent, fontWeight: 700, fontSize: 12, flex: 1, fontFamily: sans }}>{group.name}</span>
+                    <span style={{ fontSize: 9, color: T.textMuted, fontFamily: mono }}>{steps.length}</span>
+                  </div>
+                  {open && steps.map(step => {
+                    const sn = step.step_number || step.sn;
+                    const isEcn = ecnSet.has(sn);
+                    const ecnDone = isEcn && applied.has(`${unit.sn}-${sn}`);
+                    const info = cascade.get(sn);
+                    const isCasc = info?.isCascade && !ecnDone;
+                    let lbc = `${group.color || T.accent}22`;
+                    if (ecnDone) lbc = "#22c55e"; else if (isEcn) lbc = "#ef4444"; else if (isCasc) lbc = "#f59e0b";
+                    return (
+                      <div key={step.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 10px 5px 36px", borderLeft: `3px solid ${lbc}`, marginLeft: 12, background: "transparent" }}>
+                        <span style={{ fontFamily: mono, fontSize: 9, fontWeight: 700, color: ecnDone ? "#22c55e" : isEcn ? "#ef4444" : isCasc ? "#f59e0b" : (group.color || T.accent), minWidth: 26, textAlign: "center", background: `${ecnDone ? "#22c55e" : isEcn ? "#ef4444" : (group.color || T.accent)}12`, padding: "1px 4px", borderRadius: 3 }}>{sn}</span>
+                        <span style={{ fontSize: 8, fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.06)", color: "#3b82f6", fontFamily: mono }}>{step.step_type || "STEP"}</span>
+                        <div style={{ display: "flex", gap: 1, minWidth: 20 }}>
+                          {isCasc && <span style={{ fontSize: 10 }}>⚠️</span>}
+                          {isEcn && !ecnDone && <span style={{ fontSize: 10 }}>🔴</span>}
+                          {ecnDone && <span style={{ fontSize: 10 }}>✅</span>}
+                        </div>
+                        <span style={{ flex: 1, color: T.text, fontSize: 11, fontFamily: sans, opacity: ecnDone ? 0.5 : 1 }}>{step.name}</span>
+                        <div style={{ display: "flex", gap: 2 }}>
+                          {(step.parts?.length || 0) > 0 && <span style={{ fontSize: 8, fontWeight: 700, padding: "1px 4px", borderRadius: 3, background: "rgba(34,197,94,0.06)", color: "#22c55e", fontFamily: mono }}>{step.parts.length}P</span>}
+                          {(step.fasteners?.length || 0) > 0 && <span style={{ fontSize: 8, fontWeight: 700, padding: "1px 4px", borderRadius: 3, background: "rgba(239,68,68,0.06)", color: "#ef4444", fontFamily: mono }}>{step.fasteners.length}F</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {tree.length === 0 && <div style={{ textAlign: "center", color: T.textDim, padding: 40 }}>No tree data found for active version</div>}
+          </div>
+        </>
+      )}
+      {tab === "graph" && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "50vh", color: T.textMuted, fontSize: 14, fontFamily: sans }}>◈ Graph View — Coming soon</div>}
+      {tab === "kanban" && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", minHeight: "50vh", color: T.textMuted, fontSize: 14, fontFamily: sans }}>▦ Kanban Board — Coming soon</div>}
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// TREE EDITOR — admin only, read-only view + version bar
+// ═══════════════════════════════════════════════════════════
+function TreeEditorPage({ onBack }) {
+  const { role } = useAuth();
+  const [assemblies, setAssemblies] = useState([]);
+  const [selAssembly, setSelAssembly] = useState(null);
+  const [versions, setVersions] = useState([]);
+  const [activeVer, setActiveVer] = useState(null);
+  const [tree, setTree] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { DB.getAssemblies().then(d => { setAssemblies(d); if (d.length > 0) setSelAssembly(d[0]); setLoading(false); }); }, []);
+
+  useEffect(() => {
+    if (!selAssembly) return;
+    setLoading(true);
+    DB.getVersions(selAssembly.id).then(v => {
+      setVersions(v);
+      const active = v.find(x => x.status === 'active') || v[0];
+      if (active) { setActiveVer(active); DB.getTree(active.id).then(t => { setTree(t); setLoading(false); }); }
+      else setLoading(false);
+    });
+  }, [selAssembly?.id]);
+
+  if (role !== "admin") return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh", flexDirection: "column", gap: 12 }}>
+      <div style={{ fontSize: 32 }}>🔒</div>
+      <div style={{ fontSize: 14, color: T.textMuted }}>Admin access required</div>
+      <button onClick={onBack} style={{ ...btnSm(T.textMuted), fontFamily: sans }}>← Back</button>
+    </div>
+  );
+
+  return (
+    <div style={{ minHeight: "calc(100vh - 36px)", background: T.bg, padding: "16px" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+        <button onClick={onBack} style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6, padding: "4px 10px", color: T.textMuted, cursor: "pointer", fontSize: 10, fontFamily: sans }}>← Home</button>
+        <span style={{ fontSize: 14, fontWeight: 800, color: "#8b5cf6" }}>🔧 Tree Editor</span>
+        {assemblies.length > 0 && (
+          <select value={selAssembly?.id || ""} onChange={e => setSelAssembly(assemblies.find(a => a.id === e.target.value))} style={{ ...inp, fontSize: 11, fontWeight: 600 }}>
+            {assemblies.map(a => <option key={a.id} value={a.id}>{a.code} — {a.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {/* Version pills */}
+      {versions.length > 0 && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 12, flexWrap: "wrap" }}>
+          {versions.map(v => (
+            <span key={v.id} onClick={() => { setActiveVer(v); setLoading(true); DB.getTree(v.id).then(t => { setTree(t); setLoading(false); }); }}
+              style={{ padding: "3px 8px", borderRadius: 5, fontSize: 9, fontWeight: 700, fontFamily: mono, cursor: "pointer",
+                background: v.status === "active" ? "rgba(34,197,94,0.1)" : v.status === "draft" ? "rgba(139,92,246,0.08)" : "rgba(107,112,128,0.08)",
+                color: v.status === "active" ? "#22c55e" : v.status === "draft" ? "#8b5cf6" : T.textDim,
+                border: v.id === activeVer?.id ? `2px solid ${v.status === "active" ? "#22c55e" : "#8b5cf6"}` : `1px solid ${T.border}` }}>
+              {v.status === "active" ? "🟢" : v.status === "draft" ? "✏️" : "📦"} v{v.version}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Tree view */}
+      {loading ? <div style={{ textAlign: "center", color: T.textMuted, padding: 40 }}>Loading...</div> : (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 4 }}>
+          {tree.map(group => (
+            <div key={group.id}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 7, background: `${group.color || T.accent}06`, borderLeft: `3px solid ${group.color || T.accent}` }}>
+                <span style={{ fontSize: 12 }}>{group.icon || "📦"}</span>
+                <span style={{ fontWeight: 700, color: group.color || T.accent, fontSize: 12, fontFamily: sans, flex: 1 }}>{group.name}</span>
+                <span style={{ fontSize: 8, color: T.textMuted, fontFamily: mono }}>{(group.steps || []).length} steps</span>
+              </div>
+              {(group.steps || []).map(step => (
+                <div key={step.id} style={{ display: "flex", alignItems: "center", gap: 5, padding: "4px 8px 4px 22px", borderLeft: `3px solid ${group.color || T.accent}22`, marginLeft: 12 }}>
+                  <span style={{ fontFamily: mono, fontSize: 9, fontWeight: 700, color: group.color || T.accent, minWidth: 24, textAlign: "center", background: `${group.color || T.accent}10`, padding: "1px 4px", borderRadius: 3 }}>{step.step_number}</span>
+                  <span style={{ fontSize: 8, fontWeight: 600, padding: "1px 4px", borderRadius: 3, background: "rgba(59,130,246,0.06)", color: "#3b82f6", fontFamily: mono }}>{step.step_type || "STEP"}</span>
+                  <span style={{ flex: 1, fontSize: 10, color: T.text, fontFamily: sans }}>{step.name}</span>
+                  {(step.parts?.length || 0) > 0 && <span style={{ fontSize: 8, color: "#22c55e", fontFamily: mono }}>{step.parts.length}P</span>}
+                  {(step.fasteners?.length || 0) > 0 && <span style={{ fontSize: 8, color: "#ef4444", fontFamily: mono }}>{step.fasteners.length}F</span>}
+                </div>
+              ))}
+            </div>
+          ))}
+          {tree.length === 0 && <div style={{ textAlign: "center", color: T.textDim, padding: 40 }}>No tree data for this version</div>}
+        </div>
+      )}
+
+      <div style={{ marginTop: 20, padding: 16, borderRadius: 10, background: "rgba(139,92,246,0.04)", border: "1px solid rgba(139,92,246,0.1)", textAlign: "center" }}>
+        <div style={{ fontSize: 12, color: "#8b5cf6", fontWeight: 700 }}>Full inline editing available in Tree Editor V6</div>
+        <div style={{ fontSize: 10, color: T.textMuted, marginTop: 4 }}>Drag-to-reorder, P/N autocomplete, freeze/unfreeze, duplicate versions, ECN marking with dispositions</div>
+      </div>
+    </div>
+  );
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// MAIN APP
+// ═══════════════════════════════════════════════════════════
+function App() {
+  const { session, loading } = useAuth();
+  const [page, setPage] = useState("home");
+  const [assembly, setAssembly] = useState(null);
+  const [units, setUnits] = useState([]);
+
+  if (loading) return (
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100vh", color: T.textMuted, flexDirection: "column", gap: 12 }}>
+      <div style={{ width: 24, height: 24, border: `2px solid ${T.accent}`, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.6s linear infinite" }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+      <span style={{ fontSize: 12, fontFamily: sans }}>Loading...</span>
+    </div>
+  );
+  if (!session) return <LoginScreen />;
+
+  return (
+    <div style={{ minHeight: "100vh", background: T.bg, color: T.text }}>
+      <TopBar onHome={() => { setPage("home"); setAssembly(null); setUnits([]); }} />
+      {page === "home" && <HomePage onNav={(p, a) => { if (p === "units" && a) { setAssembly(a); setPage("unitSelect"); } else if (p === "units") { setPage("unitSelect"); } else setPage(p); }} />}
+      {page === "unitSelect" && assembly && <UnitSelectPage assembly={assembly} onBack={() => setPage("home")} onProceed={u => { setUnits(u); setPage("assembly"); }} />}
+      {page === "assembly" && assembly && <AssemblyViewPage assembly={assembly} selectedUnits={units} onBack={() => setPage("unitSelect")} />}
+      {page === "editor" && <TreeEditorPage onBack={() => setPage("home")} />}
+    </div>
+  );
+}
+
+// Mount
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<AuthProvider><App /></AuthProvider>);
+  </script>
+</body>
 </html>
