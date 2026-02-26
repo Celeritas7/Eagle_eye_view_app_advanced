@@ -1,5 +1,7 @@
 # Secrets — never commit
 config.js
+node_modules
+dist/
 
 # OS
 .DS_Store
